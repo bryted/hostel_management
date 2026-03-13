@@ -1,0 +1,10 @@
+[Unit]
+Description=Expire stale hostel bed reservations
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/hostel-management
+Environment="PATH=/opt/hostel-management/.venv/bin"
+EnvironmentFile=/opt/hostel-management/.env
+ExecStart=/opt/hostel-management/.venv/bin/python -m worker.expire_reservations --limit 200

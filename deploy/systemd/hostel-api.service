@@ -1,0 +1,14 @@
+[Unit]
+Description=Hostel Management FastAPI
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/hostel-management
+Environment="PATH=/opt/hostel-management/.venv/bin"
+EnvironmentFile=/opt/hostel-management/.env
+ExecStart=/opt/hostel-management/.venv/bin/python -m uvicorn backend.hostel_api.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

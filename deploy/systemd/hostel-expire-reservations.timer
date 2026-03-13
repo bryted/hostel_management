@@ -1,0 +1,10 @@
+[Unit]
+Description=Run hostel reservation expiry worker every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=hostel-expire-reservations.service
+
+[Install]
+WantedBy=timers.target

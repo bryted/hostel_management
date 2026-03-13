@@ -1,0 +1,64 @@
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    env_file:
+      - ../.env
+      - ./.env.docker
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    expose:
+      - "8000"
+
+  web:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+      args:
+        API_BASE_URL: http://api:8000/api/v1
+        NEXT_PUBLIC_API_BASE_URL: /api/v1
+    environment:
+      API_BASE_URL: http://api:8000/api/v1
+      NEXT_PUBLIC_API_BASE_URL: /api/v1
+    depends_on:
+      - api
+    restart: unless-stopped
+    expose:
+      - "3000"
+
+  worker:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    env_file:
+      - ../.env
+      - ./.env.docker
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["python", "-m", "worker.send_notifications", "--limit", "50"]
+    restart: unless-stopped
+
+  reservation_worker:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    env_file:
+      - ../.env
+      - ./.env.docker
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["python", "-m", "worker.run_expire_reservations_loop"]
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      - web
+      - api
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
