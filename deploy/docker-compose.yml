@@ -37,7 +37,7 @@ services:
       - ./.env.docker
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    command: ["python", "-m", "worker.send_notifications", "--limit", "50"]
+    command: ["python", "-m", "worker.run_notifications_loop"]
     restart: unless-stopped
 
   reservation_worker:

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { ReactNode } from "react";
 
 type PageIntroProps = {
@@ -23,6 +24,17 @@ type DataPanelProps = {
   description?: string;
   toolbar?: ReactNode;
   children: ReactNode;
+};
+
+type FilterChip = {
+  label: string;
+  value: string;
+  tone?: "default" | "accent" | "success" | "warning";
+};
+
+type FilterChipBarProps = {
+  items: FilterChip[];
+  clearHref?: string;
 };
 
 export function PageIntro({
@@ -70,6 +82,31 @@ export function DataPanel({ title, description, toolbar, children }: DataPanelPr
       </div>
       {children}
     </section>
+  );
+}
+
+export function FilterChipBar({ items, clearHref }: FilterChipBarProps) {
+  if (!items.length) {
+    return null;
+  }
+
+  return (
+    <div className="filter-chip-bar">
+      <span className="filter-chip-label">Active filters</span>
+      <div className="filter-chip-list">
+        {items.map((item) => (
+          <span key={`${item.label}-${item.value}`} className={`filter-chip ${item.tone ?? "default"}`}>
+            <strong>{item.label}</strong>
+            <span>{item.value}</span>
+          </span>
+        ))}
+        {clearHref ? (
+          <Link className="button ghost small" href={clearHref}>
+            Clear all
+          </Link>
+        ) : null}
+      </div>
+    </div>
   );
 }
 

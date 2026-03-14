@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import { InteractiveTable } from "../../components/interactive-table";
-import { DataPanel, PageIntro, StatusPill, SummaryStrip } from "../../components/page-shell";
+import { FilterChipBar, DataPanel, PageIntro, StatusPill, SummaryStrip } from "../../components/page-shell";
 import { fetchReportsOverview, requireUser } from "../../lib/server-api";
 
 type PageProps = {
@@ -72,28 +72,34 @@ export default async function ReportsPage({ searchParams }: PageProps) {
     return `/reports?${query.toString()}`;
   }
 
+  const exportQuery = `start_date=${reports.start_date}&end_date=${reports.end_date}`;
+
+  const exportLinks =
+    section === "finance"
+      ? [
+          { href: `/api/proxy/reports/finance-export.csv?${exportQuery}`, label: "Tenant finance CSV" },
+          { href: `/api/proxy/reports/collections-export.csv?${exportQuery}`, label: "Collections CSV" },
+          { href: `/api/proxy/reports/receivables-export.csv?${exportQuery}`, label: "Receivables CSV" },
+        ]
+      : section === "occupancy"
+        ? [
+            { href: `/api/proxy/reports/block-occupancy-export.csv?${exportQuery}`, label: "Block occupancy CSV" },
+            { href: `/api/proxy/reports/floor-occupancy-export.csv?${exportQuery}`, label: "Floor occupancy CSV" },
+            { href: `/api/proxy/reports/room-utilization-export.csv?${exportQuery}`, label: "Room utilization CSV" },
+          ]
+        : [
+            { href: `/api/proxy/reports/conversion-export.csv?${exportQuery}`, label: "Conversion CSV" },
+          ];
+  const reportFilterItems = [
+    { label: "Start", value: reports.start_date, tone: "accent" as const },
+    { label: "End", value: reports.end_date, tone: "accent" as const },
+    section !== "finance" ? { label: "Section", value: section, tone: "default" as const } : null,
+  ].filter((item): item is NonNullable<typeof item> => Boolean(item));
+
   return (
     <div className="grid">
       <PageIntro
         title="Reports"
-        actions={
-          <>
-            <form className="toolbar" method="get">
-              <input type="date" name="start_date" defaultValue={reports.start_date} />
-              <input type="date" name="end_date" defaultValue={reports.end_date} />
-              {section !== "finance" ? <input type="hidden" name="section" value={section} /> : null}
-              <button className="button" type="submit">
-                Apply
-              </button>
-            </form>
-            <a
-              className="button ghost small"
-              href={`/api/proxy/reports/finance-export.csv?start_date=${reports.start_date}&end_date=${reports.end_date}`}
-            >
-              Export tenant finance
-            </a>
-          </>
-        }
         aside={
           <>
             <StatusPill tone="accent">{reports.start_date} to {reports.end_date}</StatusPill>
@@ -101,6 +107,55 @@ export default async function ReportsPage({ searchParams }: PageProps) {
           </>
         }
       />
+      <section className="panel filter-bar sticky">
+        <div className="filter-bar-main">
+          <form className="filter-form" method="get">
+            <label className="filter-field">
+              <span>Start date</span>
+              <input type="date" name="start_date" defaultValue={reports.start_date} />
+            </label>
+            <label className="filter-field">
+              <span>End date</span>
+              <input type="date" name="end_date" defaultValue={reports.end_date} />
+            </label>
+            {section !== "finance" ? <input type="hidden" name="section" value={section} /> : null}
+            <div className="filter-actions">
+              <button className="button" type="submit">
+                Apply range
+              </button>
+            </div>
+          </form>
+          <div className="filter-actions">
+            {exportLinks.map((item) => (
+              <a
+                key={item.href}
+                className="button ghost small"
+                download
+                href={item.href}
+              >
+                {item.label}
+              </a>
+            ))}
+          </div>
+        </div>
+        <div className="filter-bar-meta">
+          <div className="inline-actions">
+            <Link className={section === "finance" ? "button small" : "button small ghost"} href={buildReportsHref("finance")}>
+              Finance
+            </Link>
+            <Link className={section === "occupancy" ? "button small" : "button small ghost"} href={buildReportsHref("occupancy")}>
+              Occupancy
+            </Link>
+            <Link className={section === "conversion" ? "button small" : "button small ghost"} href={buildReportsHref("conversion")}>
+              Conversion
+            </Link>
+          </div>
+          <p className="filter-copy">
+            Keep the date range on the left and use the section tabs to switch report families without losing context.
+          </p>
+        </div>
+        <FilterChipBar items={reportFilterItems} clearHref="/reports" />
+      </section>
       <SummaryStrip
         items={[
           { label: "Collected MTD", value: reports.collected_mtd, tone: "success" },
@@ -110,18 +165,6 @@ export default async function ReportsPage({ searchParams }: PageProps) {
           { label: "Pending approvals", value: reports.pending_approvals, tone: "warning" },
         ]}
       />
-
-      <div className="inline-actions">
-        <Link className={section === "finance" ? "button small" : "button small ghost"} href={buildReportsHref("finance")}>
-          Finance
-        </Link>
-        <Link className={section === "occupancy" ? "button small" : "button small ghost"} href={buildReportsHref("occupancy")}>
-          Occupancy
-        </Link>
-        <Link className={section === "conversion" ? "button small" : "button small ghost"} href={buildReportsHref("conversion")}>
-          Conversion
-        </Link>
-      </div>
 
       {section === "finance" ? (
         <>

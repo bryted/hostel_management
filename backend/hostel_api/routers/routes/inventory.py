@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import csv
 from datetime import datetime, timezone
+from io import StringIO
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -31,6 +33,19 @@ from ...schemas import (
 )
 
 router = APIRouter()
+
+
+def _inventory_csv_response(rows: list[dict[str, str | int]], filename: str, columns: list[str]) -> Response:
+    buffer = StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=columns)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(row)
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/overview", response_model=InventoryOverviewResponse)
@@ -92,6 +107,190 @@ def get_inventory_overview(
             for room, floor, block in rooms
         ],
         integrity_rows=room_bed_integrity_rows(session),
+    )
+
+
+@router.get("/available-rooms.csv")
+def download_available_rooms_export(
+    session: Session = Depends(get_db_session),
+    _user: dict = Depends(require_admin),
+) -> Response:
+    currency = get_base_currency()
+    rooms = session.execute(
+        select(Room, Floor, Block)
+        .join(Block, Block.id == Room.block_id)
+        .outerjoin(Floor, Floor.id == Room.floor_id)
+        .where(Room.is_active.is_(True))
+        .order_by(Block.name.asc(), Floor.floor_label.asc(), Room.room_code.asc())
+    ).all()
+    beds = session.execute(select(Bed).order_by(Bed.room_id.asc(), Bed.bed_number.asc())).scalars().all()
+
+    bed_counts: dict[int, dict[str, int]] = {}
+    for bed in beds:
+        counts = bed_counts.setdefault(
+            int(bed.room_id),
+            {"AVAILABLE": 0, "RESERVED": 0, "OCCUPIED": 0, "OUT_OF_SERVICE": 0},
+        )
+        counts[bed.status] = counts.get(bed.status, 0) + 1
+
+    rows: list[dict[str, str | int]] = []
+    for room, floor, block in rooms:
+        counts = bed_counts.get(int(room.id), {})
+        available_beds = int(counts.get("AVAILABLE", 0))
+        if available_beds <= 0:
+            continue
+        rows.append(
+            {
+                "Block": block.name,
+                "Floor": floor.floor_label if floor is not None else "",
+                "Room code": room.room_code,
+                "Room type": room.room_type or "",
+                "Price per bed": format_money(room.unit_price_per_bed, currency),
+                "Beds configured": int(room.beds_count or 0),
+                "Available beds": available_beds,
+                "Reserved beds": int(counts.get("RESERVED", 0)),
+                "Occupied beds": int(counts.get("OCCUPIED", 0)),
+                "Out of service beds": int(counts.get("OUT_OF_SERVICE", 0)),
+            }
+        )
+
+    columns = [
+        "Block",
+        "Floor",
+        "Room code",
+        "Room type",
+        "Price per bed",
+        "Beds configured",
+        "Available beds",
+        "Reserved beds",
+        "Occupied beds",
+        "Out of service beds",
+    ]
+    filename = f"available-rooms-{datetime.now(timezone.utc).date().isoformat()}.csv"
+    return _inventory_csv_response(rows, filename, columns)
+
+
+@router.get("/rooms.csv")
+def download_rooms_export(
+    session: Session = Depends(get_db_session),
+    _user: dict = Depends(require_admin),
+) -> Response:
+    currency = get_base_currency()
+    rooms = session.execute(
+        select(Room, Floor, Block)
+        .join(Block, Block.id == Room.block_id)
+        .outerjoin(Floor, Floor.id == Room.floor_id)
+        .order_by(Block.name.asc(), Floor.floor_label.asc(), Room.room_code.asc())
+    ).all()
+    beds = session.execute(select(Bed).order_by(Bed.room_id.asc(), Bed.bed_number.asc())).scalars().all()
+
+    bed_counts: dict[int, dict[str, int]] = {}
+    for bed in beds:
+        counts = bed_counts.setdefault(
+            int(bed.room_id),
+            {"AVAILABLE": 0, "RESERVED": 0, "OCCUPIED": 0, "OUT_OF_SERVICE": 0},
+        )
+        counts[bed.status] = counts.get(bed.status, 0) + 1
+
+    rows: list[dict[str, str | int]] = []
+    for room, floor, block in rooms:
+        counts = bed_counts.get(int(room.id), {})
+        rows.append(
+            {
+                "Block": block.name,
+                "Floor": floor.floor_label if floor is not None else "",
+                "Room code": room.room_code,
+                "Room type": room.room_type or "",
+                "Price per bed": format_money(room.unit_price_per_bed, currency),
+                "Beds configured": int(room.beds_count or 0),
+                "Available beds": int(counts.get("AVAILABLE", 0)),
+                "Reserved beds": int(counts.get("RESERVED", 0)),
+                "Occupied beds": int(counts.get("OCCUPIED", 0)),
+                "Out of service beds": int(counts.get("OUT_OF_SERVICE", 0)),
+                "Status": "Active" if bool(room.is_active) else "Inactive",
+            }
+        )
+
+    return _inventory_csv_response(
+        rows,
+        f"rooms-{datetime.now(timezone.utc).date().isoformat()}.csv",
+        [
+            "Block",
+            "Floor",
+            "Room code",
+            "Room type",
+            "Price per bed",
+            "Beds configured",
+            "Available beds",
+            "Reserved beds",
+            "Occupied beds",
+            "Out of service beds",
+            "Status",
+        ],
+    )
+
+
+@router.get("/available-beds.csv")
+def download_available_beds_export(
+    session: Session = Depends(get_db_session),
+    _user: dict = Depends(require_admin),
+) -> Response:
+    rows = session.execute(
+        select(Bed, Room, Floor, Block)
+        .join(Room, Room.id == Bed.room_id)
+        .join(Block, Block.id == Room.block_id)
+        .outerjoin(Floor, Floor.id == Room.floor_id)
+        .where(Bed.status == "AVAILABLE", Room.is_active.is_(True))
+        .order_by(Block.name.asc(), Floor.floor_label.asc(), Room.room_code.asc(), Bed.bed_number.asc())
+    ).all()
+
+    data = [
+        {
+            "Block": block.name,
+            "Floor": floor.floor_label if floor is not None else "",
+            "Room code": room.room_code,
+            "Bed": bed.bed_label,
+            "Room type": room.room_type or "",
+            "Price per bed": format_money(room.unit_price_per_bed, get_base_currency()),
+        }
+        for bed, room, floor, block in rows
+    ]
+
+    return _inventory_csv_response(
+        data,
+        f"available-beds-{datetime.now(timezone.utc).date().isoformat()}.csv",
+        ["Block", "Floor", "Room code", "Bed", "Room type", "Price per bed"],
+    )
+
+
+@router.get("/upload-template.csv")
+def download_inventory_upload_template(
+    _user: dict = Depends(require_admin),
+) -> Response:
+    columns = [
+        "block",
+        "floor",
+        "room_code",
+        "room_type",
+        "unit_price_per_bed",
+        "is_active",
+        "beds_count",
+    ]
+    example_rows = [
+        {
+            "block": "Block A",
+            "floor": "Floor 1",
+            "room_code": "A-101",
+            "room_type": "2_IN_ROOM",
+            "unit_price_per_bed": "950.00",
+            "is_active": "true",
+            "beds_count": "2",
+        }
+    ]
+    return _inventory_csv_response(
+        example_rows,
+        "inventory-upload-template.csv",
+        columns,
     )
 
 

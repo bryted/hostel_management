@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 from datetime import date, datetime, timezone
 from io import StringIO
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
@@ -14,6 +15,20 @@ from ...deps import get_db_session, require_admin
 from ...schemas import ReportsOverviewResponse
 
 router = APIRouter()
+
+
+def _csv_response(rows: list[dict[str, Any]], filename: str, fallback_columns: list[str]) -> Response:
+    columns = list(rows[0].keys()) if rows else fallback_columns
+    buffer = StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=columns)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(row)
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/overview", response_model=ReportsOverviewResponse)
@@ -87,16 +102,181 @@ def download_finance_export(
         end_date=report_end,
         currency=get_base_currency(),
     )
-    rows = tables["tenant_finance_rows"]
-    columns = list(rows[0].keys()) if rows else ["Tenant", "Invoice", "Payment", "Receipt", "Paid on", "Amount", "Balance"]
-    buffer = StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=columns)
-    writer.writeheader()
-    for row in rows:
-        writer.writerow(row)
     filename = f"tenant-finance-{report_start.isoformat()}-{report_end.isoformat()}.csv"
-    return Response(
-        content=buffer.getvalue(),
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    return _csv_response(
+        tables["tenant_finance_rows"],
+        filename,
+        ["Tenant", "Invoice", "Payment", "Receipt", "Paid on", "Amount", "Balance"],
+    )
+
+
+@router.get("/collections-export.csv")
+def download_collections_export(
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    session: Session = Depends(get_db_session),
+    _user: dict = Depends(require_admin),
+) -> Response:
+    now = datetime.now(timezone.utc)
+    report_start = start_date or now.date()
+    report_end = end_date or now.date()
+    if report_end < report_start:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="End date must be on or after start date.",
+        )
+    tables = get_reporting_tables(
+        session,
+        start_date=report_start,
+        end_date=report_end,
+        currency=get_base_currency(),
+    )
+    return _csv_response(
+        tables["collections_by_method"],
+        f"collections-by-method-{report_start.isoformat()}-{report_end.isoformat()}.csv",
+        ["Method", "Transactions", "Amount"],
+    )
+
+
+@router.get("/receivables-export.csv")
+def download_receivables_export(
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    session: Session = Depends(get_db_session),
+    _user: dict = Depends(require_admin),
+) -> Response:
+    now = datetime.now(timezone.utc)
+    report_start = start_date or now.date()
+    report_end = end_date or now.date()
+    if report_end < report_start:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="End date must be on or after start date.",
+        )
+    tables = get_reporting_tables(
+        session,
+        start_date=report_start,
+        end_date=report_end,
+        currency=get_base_currency(),
+    )
+    return _csv_response(
+        tables["aging_rows"],
+        f"receivables-aging-{report_start.isoformat()}-{report_end.isoformat()}.csv",
+        ["Invoice", "Tenant", "Due", "Days overdue", "Bucket", "Balance"],
+    )
+
+
+@router.get("/block-occupancy-export.csv")
+def download_block_occupancy_export(
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    session: Session = Depends(get_db_session),
+    _user: dict = Depends(require_admin),
+) -> Response:
+    now = datetime.now(timezone.utc)
+    report_start = start_date or now.date()
+    report_end = end_date or now.date()
+    if report_end < report_start:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="End date must be on or after start date.",
+        )
+    snapshot = get_dashboard_snapshot(
+        session,
+        as_of=now,
+        currency=get_base_currency(),
+        start_date=report_start,
+        end_date=report_end,
+        include_occupancy_tables=True,
+    )
+    return _csv_response(
+        snapshot.block_occupancy_rows,
+        f"block-occupancy-{report_start.isoformat()}-{report_end.isoformat()}.csv",
+        ["Block", "Total", "Occupied", "Reserved", "Available", "Out of service", "Occupancy %"],
+    )
+
+
+@router.get("/floor-occupancy-export.csv")
+def download_floor_occupancy_export(
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    session: Session = Depends(get_db_session),
+    _user: dict = Depends(require_admin),
+) -> Response:
+    now = datetime.now(timezone.utc)
+    report_start = start_date or now.date()
+    report_end = end_date or now.date()
+    if report_end < report_start:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="End date must be on or after start date.",
+        )
+    snapshot = get_dashboard_snapshot(
+        session,
+        as_of=now,
+        currency=get_base_currency(),
+        start_date=report_start,
+        end_date=report_end,
+        include_occupancy_tables=True,
+    )
+    return _csv_response(
+        snapshot.floor_occupancy_rows,
+        f"floor-occupancy-{report_start.isoformat()}-{report_end.isoformat()}.csv",
+        ["Block", "Floor", "Total", "Occupied", "Reserved", "Available", "Out of service", "Occupancy %"],
+    )
+
+
+@router.get("/room-utilization-export.csv")
+def download_room_utilization_export(
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    session: Session = Depends(get_db_session),
+    _user: dict = Depends(require_admin),
+) -> Response:
+    now = datetime.now(timezone.utc)
+    report_start = start_date or now.date()
+    report_end = end_date or now.date()
+    if report_end < report_start:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="End date must be on or after start date.",
+        )
+    tables = get_reporting_tables(
+        session,
+        start_date=report_start,
+        end_date=report_end,
+        currency=get_base_currency(),
+    )
+    return _csv_response(
+        tables["room_utilization"],
+        f"room-utilization-{report_start.isoformat()}-{report_end.isoformat()}.csv",
+        ["Block", "Room", "Total beds", "Occupied", "Reserved", "Available", "Out of service"],
+    )
+
+
+@router.get("/conversion-export.csv")
+def download_conversion_export(
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    session: Session = Depends(get_db_session),
+    _user: dict = Depends(require_admin),
+) -> Response:
+    now = datetime.now(timezone.utc)
+    report_start = start_date or now.date()
+    report_end = end_date or now.date()
+    if report_end < report_start:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="End date must be on or after start date.",
+        )
+    tables = get_reporting_tables(
+        session,
+        start_date=report_start,
+        end_date=report_end,
+        currency=get_base_currency(),
+    )
+    return _csv_response(
+        tables["conversion_rows"],
+        f"conversion-{report_start.isoformat()}-{report_end.isoformat()}.csv",
+        ["Metric", "Value"],
     )

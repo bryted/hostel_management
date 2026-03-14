@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import { BillingActions } from "../../components/billing-actions";
-import { DataPanel, PageIntro, SummaryStrip, StatusPill } from "../../components/page-shell";
+import { DataPanel, FilterChipBar, PageIntro, SummaryStrip, StatusPill } from "../../components/page-shell";
 import { ReceiptActions } from "../../components/receipt-actions";
 import { TenantActions } from "../../components/tenant-actions";
 import {
@@ -242,23 +242,20 @@ export default async function BillingPage({ searchParams }: PageProps) {
         ? PAYMENT_PAGE_SIZE
         : RECEIPT_PAGE_SIZE;
   const ledgerPages = totalPages(ledgerTotal, ledgerPageSize);
+  const activeFilterItems = [
+    search ? { label: "Search", value: search, tone: "accent" as const } : null,
+    queueFilter !== "all" ? { label: "Queue", value: queueFilter.replace("_", " "), tone: "warning" as const } : null,
+    ledgerFilter !== "invoices" ? { label: "Ledger", value: ledgerFilter, tone: "default" as const } : null,
+    invoiceStatusFilter !== "open"
+      ? { label: "Invoice status", value: invoiceStatusFilter.replace("_", " "), tone: "success" as const }
+      : null,
+  ].filter((item): item is NonNullable<typeof item> => Boolean(item));
 
   return (
     <div className="grid">
       <PageIntro
         title="Billing"
         description={`The billing desk is organized around active balances first. Bed holds stay active for ${billing.default_hold_hours}h after approval and release automatically if unpaid.`}
-        actions={
-          <form className="toolbar" method="get">
-            <input name="search" defaultValue={search} placeholder="Search tenant, invoice, reference" />
-            {queueFilter !== "all" ? <input type="hidden" name="queue" value={queueFilter} /> : null}
-            {ledgerFilter !== "invoices" ? <input type="hidden" name="ledger" value={ledgerFilter} /> : null}
-            {invoiceStatusFilter !== "open" ? <input type="hidden" name="invoice_status" value={invoiceStatusFilter} /> : null}
-            <button className="button" type="submit">
-              Search
-            </button>
-          </form>
-        }
         aside={
           <>
             {search ? <StatusPill tone="accent">Filtered</StatusPill> : <StatusPill>Focus mode</StatusPill>}
@@ -271,6 +268,31 @@ export default async function BillingPage({ searchParams }: PageProps) {
           </>
         }
       />
+      <section className="panel filter-bar sticky">
+        <div className="filter-bar-main">
+          <form className="filter-form" method="get">
+            <label className="filter-field grow">
+              <span>Billing search</span>
+              <input name="search" type="search" defaultValue={search} placeholder="Search tenant, invoice, or reference" />
+            </label>
+            {queueFilter !== "all" ? <input type="hidden" name="queue" value={queueFilter} /> : null}
+            {ledgerFilter !== "invoices" ? <input type="hidden" name="ledger" value={ledgerFilter} /> : null}
+            {invoiceStatusFilter !== "open" ? <input type="hidden" name="invoice_status" value={invoiceStatusFilter} /> : null}
+            <div className="filter-actions">
+              <button className="button" type="submit">
+                Apply search
+              </button>
+              <Link className="button ghost" href="/billing">
+                Reset
+              </Link>
+            </div>
+          </form>
+          <p className="filter-copy">
+            Search applies across the action queue, invoice history, payments, and receipts so staff can keep one billing context in view.
+          </p>
+        </div>
+        <FilterChipBar items={activeFilterItems} clearHref="/billing" />
+      </section>
       <SummaryStrip
         items={[
           { label: "Outstanding balances", value: billing.outstanding_total, tone: "warning" },

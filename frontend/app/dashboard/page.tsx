@@ -78,18 +78,6 @@ export default async function DashboardPage({ searchParams }: PageProps) {
             ? "Operations overview focused on collections, queue pressure, and occupancy."
             : "Cash position, collection pressure, and resident access."
         }
-        actions={
-          <form className="toolbar" method="get">
-            <input defaultValue={summary.start_date} name="start_date" type="date" />
-            <input defaultValue={summary.end_date} name="end_date" type="date" />
-            <button className="button" type="submit">
-              Apply range
-            </button>
-            <Link className="button ghost" href="/dashboard">
-              Reset
-            </Link>
-          </form>
-        }
         aside={
           <>
             <StatusPill tone={queuePressure ? "warning" : "success"}>{queuePressure} items need action</StatusPill>
@@ -99,6 +87,31 @@ export default async function DashboardPage({ searchParams }: PageProps) {
           </>
         }
       />
+      <section className="panel filter-bar">
+        <div className="filter-bar-main">
+          <form className="filter-form" method="get">
+            <label className="filter-field">
+              <span>Start date</span>
+              <input defaultValue={summary.start_date} name="start_date" type="date" />
+            </label>
+            <label className="filter-field">
+              <span>End date</span>
+              <input defaultValue={summary.end_date} name="end_date" type="date" />
+            </label>
+            <div className="filter-actions">
+              <button className="button" type="submit">
+                Apply range
+              </button>
+              <Link className="button ghost" href="/dashboard">
+                Reset
+              </Link>
+            </div>
+          </form>
+          <p className="filter-copy">
+            Change the collection window without leaving the operations summary. The cards and pipeline counts update together.
+          </p>
+        </div>
+      </section>
       <SummaryStrip
         items={[
           { label: "Outstanding", value: summary.outstanding, tone: "warning" },

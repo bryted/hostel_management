@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import { OnboardingRowActions } from "../../components/onboarding-row-actions";
-import { DataPanel, PageIntro, SummaryStrip, StatusPill } from "../../components/page-shell";
+import { DataPanel, FilterChipBar, PageIntro, SummaryStrip, StatusPill } from "../../components/page-shell";
 import { TenantActions } from "../../components/tenant-actions";
 import { fetchOnboardingOverview, requireUser } from "../../lib/server-api";
 
@@ -48,6 +48,10 @@ export default async function OnboardingPage({ searchParams }: PageProps) {
   const search = params.search ?? "";
   const stage = params.stage ?? "";
   const onboarding = await fetchOnboardingOverview(search, stage);
+  const activeFilterItems = [
+    search ? { label: "Search", value: search, tone: "accent" as const } : null,
+    stage ? { label: "Stage", value: stage, tone: "warning" as const } : null,
+  ].filter((item): item is NonNullable<typeof item> => Boolean(item));
 
   return (
     <div className="grid">
@@ -56,6 +60,36 @@ export default async function OnboardingPage({ searchParams }: PageProps) {
         description="Payment-to-allocation handoff queue."
         aside={stage ? <StatusPill tone={toneForStage(stage)}>{stage}</StatusPill> : <StatusPill>All stages</StatusPill>}
       />
+      <section className="panel filter-bar">
+        <div className="filter-bar-main">
+          <form className="filter-form" method="get">
+            <label className="filter-field grow">
+              <span>Queue search</span>
+              <input name="search" type="search" defaultValue={search} placeholder="Search tenant or invoice" />
+            </label>
+            <label className="filter-field">
+              <span>Stage</span>
+              <select name="stage" defaultValue={stage}>
+                <option value="">All stages</option>
+                <option value="Approved unpaid">Approved unpaid</option>
+                <option value="Paid unallocated">Paid unallocated</option>
+              </select>
+            </label>
+            <div className="filter-actions">
+              <button className="button" type="submit">
+                Apply filters
+              </button>
+              <Link className="button ghost" href="/onboarding">
+                Reset
+              </Link>
+            </div>
+          </form>
+          <p className="filter-copy">
+            Search and stage selection control the handoff queue before you allocate or recover expired holds.
+          </p>
+        </div>
+        <FilterChipBar items={activeFilterItems} clearHref="/onboarding" />
+      </section>
       <SummaryStrip
         items={[
           { label: "Prospects", value: onboarding.prospects, tone: "default" },
@@ -66,22 +100,7 @@ export default async function OnboardingPage({ searchParams }: PageProps) {
         ]}
       />
       <TenantActions title="Capture prospect" defaultStatus="prospect" compact />
-      <DataPanel
-        title="Onboarding queue"
-        toolbar={
-          <form className="toolbar" method="get">
-            <input name="search" defaultValue={search} placeholder="Search tenant or invoice" />
-            <select name="stage" defaultValue={stage}>
-              <option value="">All stages</option>
-              <option value="Approved unpaid">Approved unpaid</option>
-              <option value="Paid unallocated">Paid unallocated</option>
-            </select>
-            <button className="button" type="submit">
-              Filter
-            </button>
-          </form>
-        }
-      >
+      <DataPanel title="Onboarding queue">
         <table className="table">
           <thead>
             <tr>

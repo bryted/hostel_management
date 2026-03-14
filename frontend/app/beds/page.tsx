@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import { BedMaintenanceForm } from "../../components/bed-maintenance-form";
-import { DataPanel, PageIntro, SummaryStrip, StatusPill } from "../../components/page-shell";
+import { DataPanel, FilterChipBar, PageIntro, SummaryStrip, StatusPill } from "../../components/page-shell";
 import { fetchBeds, requireUser } from "../../lib/server-api";
 
 type PageProps = {
@@ -34,6 +34,10 @@ export default async function BedsPage({ searchParams }: PageProps) {
   const reservedCount = beds.filter((bed) => bed.status === "RESERVED").length;
   const occupiedCount = beds.filter((bed) => bed.status === "OCCUPIED").length;
   const outCount = beds.filter((bed) => bed.status === "OUT_OF_SERVICE").length;
+  const activeFilterItems = [
+    search ? { label: "Search", value: search, tone: "accent" as const } : null,
+    status ? { label: "Status", value: status, tone: "warning" as const } : null,
+  ].filter((item): item is NonNullable<typeof item> => Boolean(item));
 
   return (
     <div className="grid">
@@ -54,6 +58,38 @@ export default async function BedsPage({ searchParams }: PageProps) {
           </>
         }
       />
+      <section className="panel filter-bar">
+        <div className="filter-bar-main">
+          <form className="filter-form" method="get">
+            <label className="filter-field grow">
+              <span>Search</span>
+              <input name="search" type="search" defaultValue={search} placeholder="Search tenant, room, or invoice" />
+            </label>
+            <label className="filter-field">
+              <span>Status</span>
+              <select name="status" defaultValue={status}>
+                <option value="">All statuses</option>
+                <option value="AVAILABLE">Available</option>
+                <option value="RESERVED">Reserved</option>
+                <option value="OCCUPIED">Occupied</option>
+                <option value="OUT_OF_SERVICE">Out of service</option>
+              </select>
+            </label>
+            <div className="filter-actions">
+              <button className="button" type="submit">
+                Apply filters
+              </button>
+              <Link className="button ghost" href="/beds">
+                Reset
+              </Link>
+            </div>
+          </form>
+          <p className="filter-copy">
+            Use one register filter row for live bed status, then work row-level actions inside the table.
+          </p>
+        </div>
+        <FilterChipBar items={activeFilterItems} clearHref="/beds" />
+      </section>
       <SummaryStrip
         items={[
           { label: "Visible beds", value: beds.length, tone: "default" },
@@ -63,24 +99,7 @@ export default async function BedsPage({ searchParams }: PageProps) {
           { label: "Out of service", value: outCount, tone: "default" },
         ]}
       />
-      <DataPanel
-        title="Register"
-        toolbar={
-          <form className="toolbar" method="get">
-            <input name="search" defaultValue={search} placeholder="Search tenant, room, invoice" />
-            <select name="status" defaultValue={status}>
-              <option value="">All statuses</option>
-              <option value="AVAILABLE">Available</option>
-              <option value="RESERVED">Reserved</option>
-              <option value="OCCUPIED">Occupied</option>
-              <option value="OUT_OF_SERVICE">Out of service</option>
-            </select>
-            <button className="button" type="submit">
-              Filter
-            </button>
-          </form>
-        }
-      >
+      <DataPanel title="Register">
         {!beds.length ? (
           <p className="section-note">
             No beds match the current filters. Adjust the status filter or search

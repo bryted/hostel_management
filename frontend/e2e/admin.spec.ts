@@ -34,6 +34,33 @@ test("admin can access core admin surfaces", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
 });
 
+test("admin can download reports and inventory exports", async ({ page }) => {
+  await login(page, adminUsername!, adminPassword!);
+
+  await page.goto("/reports");
+  const financeDownloadPromise = page.waitForEvent("download");
+  await page.getByRole("link", { name: "Tenant finance CSV" }).click();
+  const financeDownload = await financeDownloadPromise;
+  expect(financeDownload.suggestedFilename()).toMatch(/^tenant-finance-.*\.csv$/);
+
+  await page.getByRole("link", { name: "Occupancy" }).click();
+  const occupancyDownloadPromise = page.waitForEvent("download");
+  await page.getByRole("link", { name: "Room utilization CSV" }).click();
+  const occupancyDownload = await occupancyDownloadPromise;
+  expect(occupancyDownload.suggestedFilename()).toMatch(/^room-utilization-.*\.csv$/);
+
+  await page.goto("/inventory?section=structure");
+  const roomsDownloadPromise = page.waitForEvent("download");
+  await page.getByRole("link", { name: "Download all rooms" }).click();
+  const roomsDownload = await roomsDownloadPromise;
+  expect(roomsDownload.suggestedFilename()).toMatch(/^rooms-.*\.csv$/);
+
+  const bedsDownloadPromise = page.waitForEvent("download");
+  await page.getByRole("link", { name: "Download available beds" }).click();
+  const bedsDownload = await bedsDownloadPromise;
+  expect(bedsDownload.suggestedFilename()).toMatch(/^available-beds-.*\.csv$/);
+});
+
 test("admin can test providers and use global search", async ({ page }) => {
   await login(page, adminUsername!, adminPassword!);
 
@@ -125,7 +152,7 @@ test("admin can create an invoice from billing", async ({ page }) => {
   await page.goto("/billing");
   await page.locator("summary.action-summary").filter({ hasText: "Create invoice" }).click();
   await page.getByLabel("Tenant").first().selectOption({ label: tenantName });
-  await page.getByLabel("Bed").first().selectOption({ index: 1 });
+  await selectOptionByPartialText(page.getByLabel("Bed").first(), "E2E-103 / B1");
   await page.getByLabel("Notes").fill("E2E browser invoice");
   await page.getByLabel("Submit now").selectOption({ label: "Save as draft" });
   await page.getByRole("button", { name: "Create invoice" }).click();

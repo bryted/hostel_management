@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { DataPanel, PageIntro, SummaryStrip, StatusPill } from "../../components/page-shell";
+import { DataPanel, FilterChipBar, PageIntro, SummaryStrip, StatusPill } from "../../components/page-shell";
 import { TenantActions } from "../../components/tenant-actions";
 import { fetchTenants, requireUser } from "../../lib/server-api";
 
@@ -17,6 +17,7 @@ export default async function TenantsPage({ searchParams }: PageProps) {
   const tenants = await fetchTenants(search);
   const activeCount = tenants.filter((tenant) => tenant.status === "active").length;
   const prospectCount = tenants.filter((tenant) => tenant.status === "prospect").length;
+  const activeFilterItems = search ? [{ label: "Search", value: search, tone: "accent" as const }] : [];
 
   return (
     <div className="grid">
@@ -25,6 +26,28 @@ export default async function TenantsPage({ searchParams }: PageProps) {
         description="Resident and prospect directory."
         aside={search ? <StatusPill tone="accent">Filtered</StatusPill> : <StatusPill>All records</StatusPill>}
       />
+      <section className="panel filter-bar">
+        <div className="filter-bar-main">
+          <form className="filter-form" method="get">
+            <label className="filter-field grow">
+              <span>Resident search</span>
+              <input name="search" type="search" defaultValue={search} placeholder="Search name, email, or phone" />
+            </label>
+            <div className="filter-actions">
+              <button className="button" type="submit">
+                Apply search
+              </button>
+              <Link className="button ghost" href="/tenants">
+                Reset
+              </Link>
+            </div>
+          </form>
+          <p className="filter-copy">
+            Keep the directory search above the summary so the counts and the table always reflect the same resident slice.
+          </p>
+        </div>
+        <FilterChipBar items={activeFilterItems} clearHref="/tenants" />
+      </section>
       <SummaryStrip
         items={[
           { label: "Visible tenants", value: tenants.length, tone: "default" },
@@ -33,17 +56,7 @@ export default async function TenantsPage({ searchParams }: PageProps) {
         ]}
       />
       <div className="grid two workspace-grid">
-        <DataPanel
-          title="Directory"
-          toolbar={
-            <form className="toolbar" method="get">
-              <input name="search" defaultValue={search} placeholder="Search name, email, phone" />
-              <button className="button" type="submit">
-                Search
-              </button>
-            </form>
-          }
-        >
+        <DataPanel title="Directory">
           <table className="table">
             <thead>
               <tr>

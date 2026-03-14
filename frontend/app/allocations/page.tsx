@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import { AllocationRoster } from "../../components/allocation-roster";
-import { DataPanel, PageIntro, StatusPill, SummaryStrip } from "../../components/page-shell";
+import { DataPanel, FilterChipBar, PageIntro, StatusPill, SummaryStrip } from "../../components/page-shell";
 import { fetchAllocationOverview, requireUser } from "../../lib/server-api";
 
 type PageProps = {
@@ -50,6 +50,7 @@ export default async function AllocationsPage({ searchParams }: PageProps) {
   const search = params.search ?? "";
   const overview = await fetchAllocationOverview(search);
   const transferableRows = overview.rows.filter((row) => row.transfer_targets.length).length;
+  const activeFilterItems = search ? [{ label: "Search", value: search, tone: "accent" as const }] : [];
 
   return (
     <div className="grid">
@@ -68,6 +69,28 @@ export default async function AllocationsPage({ searchParams }: PageProps) {
         description="Transfer and move-out roster."
         aside={search ? <StatusPill tone="accent">Filtered</StatusPill> : <StatusPill>All stays</StatusPill>}
       />
+      <section className="panel filter-bar">
+        <div className="filter-bar-main">
+          <form className="filter-form" method="get">
+            <label className="filter-field grow">
+              <span>Allocation search</span>
+              <input name="search" type="search" defaultValue={search} placeholder="Search tenant, invoice, or room" />
+            </label>
+            <div className="filter-actions">
+              <button className="button" type="submit">
+                Apply search
+              </button>
+              <Link className="button ghost" href="/allocations">
+                Reset
+              </Link>
+            </div>
+          </form>
+          <p className="filter-copy">
+            Keep the roster filter above the summary so transfer counts and the active-stay table stay aligned.
+          </p>
+        </div>
+        <FilterChipBar items={activeFilterItems} clearHref="/allocations" />
+      </section>
       <SummaryStrip
         items={[
           { label: "Active stays", value: overview.active_allocations, tone: "accent" },
@@ -75,17 +98,7 @@ export default async function AllocationsPage({ searchParams }: PageProps) {
           { label: "Transfer-ready", value: transferableRows, tone: "success" },
         ]}
       />
-      <DataPanel
-        title="Active stays"
-        toolbar={
-          <form className="toolbar" method="get">
-            <input name="search" defaultValue={search} placeholder="Search tenant, invoice, room" />
-            <button className="button" type="submit">
-              Search
-            </button>
-          </form>
-        }
-      >
+      <DataPanel title="Active stays">
         <AllocationRoster rows={overview.rows} />
       </DataPanel>
     </div>

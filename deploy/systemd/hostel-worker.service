@@ -6,7 +6,7 @@ After=network.target
 WorkingDirectory=/opt/hostel-management
 Environment="PATH=/opt/hostel-management/.venv/bin"
 EnvironmentFile=/opt/hostel-management/.env
-ExecStart=/opt/hostel-management/.venv/bin/python -m worker.send_notifications --limit 50
+ExecStart=/opt/hostel-management/.venv/bin/python -m worker.run_notifications_loop
 Restart=always
 RestartSec=10
 

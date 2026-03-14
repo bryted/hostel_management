@@ -96,6 +96,20 @@ export default async function InventoryPage({ searchParams }: PageProps) {
     return nextSection === "overview" ? "/inventory" : `/inventory?section=${nextSection}`;
   }
 
+  const exportLinks =
+    section === "structure"
+      ? [
+          { href: "/api/proxy/inventory/rooms.csv", label: "Download all rooms" },
+          { href: "/api/proxy/inventory/available-rooms.csv", label: "Download available rooms" },
+          { href: "/api/proxy/inventory/available-beds.csv", label: "Download available beds" },
+          { href: "/api/proxy/inventory/upload-template.csv", label: "Download upload template" },
+        ]
+      : [
+          { href: "/api/proxy/inventory/available-rooms.csv", label: "Download available rooms" },
+          { href: "/api/proxy/inventory/available-beds.csv", label: "Download available beds" },
+          { href: "/api/proxy/inventory/upload-template.csv", label: "Download upload template" },
+        ];
+
   return (
     <div className="grid">
       <PageIntro
@@ -117,6 +131,11 @@ export default async function InventoryPage({ searchParams }: PageProps) {
             <Link className="button ghost small" href="/onboarding">
               Open onboarding queue
             </Link>
+            {exportLinks.map((item) => (
+              <a key={item.href} className="button ghost small" download href={item.href}>
+                {item.label}
+              </a>
+            ))}
           </>
         }
         aside={<StatusPill tone={integrityIssues ? "warning" : "success"}>{integrityIssues ? `${integrityIssues} integrity checks` : "Integrity clean"}</StatusPill>}

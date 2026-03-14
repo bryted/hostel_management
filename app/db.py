@@ -1,9 +1,11 @@
 import os
+from functools import lru_cache
 from pathlib import Path
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session, sessionmaker
 
 
 load_dotenv(Path(".env"))
@@ -16,7 +18,8 @@ def get_database_url() -> str:
     return db_url
 
 
-def get_engine():
+@lru_cache(maxsize=1)
+def get_engine() -> Engine:
     return create_engine(
         get_database_url(),
         future=True,
@@ -27,6 +30,15 @@ def get_engine():
     )
 
 
-def get_session():
-    engine = get_engine()
-    return sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+@lru_cache(maxsize=1)
+def get_session_factory() -> sessionmaker[Session]:
+    return sessionmaker(
+        bind=get_engine(),
+        autoflush=False,
+        autocommit=False,
+        future=True,
+    )
+
+
+def get_session() -> sessionmaker[Session]:
+    return get_session_factory()

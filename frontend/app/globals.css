@@ -475,6 +475,138 @@ select:focus {
   justify-content: flex-end;
 }
 
+.filter-bar {
+  display: grid;
+  gap: 14px;
+}
+
+.filter-bar.sticky {
+  position: sticky;
+  top: 14px;
+  z-index: 6;
+}
+
+.filter-bar-main {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.filter-bar-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.filter-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  flex: 1 1 640px;
+}
+
+.filter-field {
+  display: grid;
+  gap: 6px;
+  min-width: 150px;
+}
+
+.filter-field.grow {
+  flex: 1 1 280px;
+}
+
+.filter-field span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.filter-field input,
+.filter-field select {
+  width: 100%;
+}
+
+.filter-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.filter-copy {
+  max-width: 360px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.filter-chip-bar {
+  display: grid;
+  gap: 10px;
+}
+
+.filter-chip-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.filter-chip-list {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-tint);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.filter-chip strong {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.filter-chip.default {
+  border-color: var(--border);
+}
+
+.filter-chip.accent {
+  border-color: rgba(37, 99, 235, 0.22);
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.filter-chip.success {
+  border-color: rgba(22, 163, 74, 0.22);
+  background: rgba(22, 163, 74, 0.08);
+}
+
+.filter-chip.warning {
+  border-color: rgba(217, 119, 6, 0.25);
+  background: rgba(217, 119, 6, 0.1);
+}
+
 .table-scroll {
   overflow: auto;
   max-width: 100%;
@@ -1297,9 +1429,22 @@ select:focus {
     padding: 14px 14px 26px;
   }
 
+  .filter-bar.sticky {
+    position: static;
+  }
+
+  .filter-bar-main,
+  .filter-bar-meta {
+    justify-content: flex-start;
+  }
+
   .app-topbar,
   .page-header-main,
   .data-panel-header,
+  .filter-bar-main,
+  .filter-form,
+  .filter-bar-meta,
+  .filter-actions,
   .toolbar,
   .inline-actions,
   .feedback-dialog-actions,
@@ -1313,5 +1458,18 @@ select:focus {
   .meta-row strong,
   .meta-row span:last-child {
     text-align: left;
+  }
+
+  .filter-copy,
+  .filter-form,
+  .filter-field,
+  .filter-actions,
+  .filter-chip-list {
+    width: 100%;
+  }
+
+  .filter-chip {
+    width: 100%;
+    justify-content: space-between;
   }
 }

@@ -5,13 +5,13 @@ from collections.abc import Generator
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from app.db import get_engine
+from app.db import get_session
 from app.models import User
 from app.services.auth import serialize_user
 
 
 def get_db_session() -> Generator[Session, None, None]:
-    with Session(get_engine()) as session:
+    with get_session()() as session:
         yield session
 
 
