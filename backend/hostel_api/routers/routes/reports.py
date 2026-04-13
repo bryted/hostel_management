@@ -35,6 +35,12 @@ def _csv_response(rows: list[dict[str, Any]], filename: str, fallback_columns: l
 def get_reports_overview(
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
+    section: str = Query(default="finance"),
+    academic_year_id: int | None = Query(default=None),
+    tenant_query: str = Query(default=""),
+    aging_page: int = Query(default=1, ge=1),
+    finance_page: int = Query(default=1, ge=1),
+    room_page: int = Query(default=1, ge=1),
     session: Session = Depends(get_db_session),
     _user: dict = Depends(require_admin),
 ) -> ReportsOverviewResponse:
@@ -46,6 +52,9 @@ def get_reports_overview(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="End date must be on or after start date.",
         )
+    normalized_section = section.strip().lower() if section.strip() else "finance"
+    if normalized_section not in {"finance", "occupancy", "conversion"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid report section.")
     currency = get_base_currency()
     snapshot = get_dashboard_snapshot(
         session,
@@ -53,13 +62,24 @@ def get_reports_overview(
         currency=currency,
         start_date=report_start,
         end_date=report_end,
-        include_occupancy_tables=True,
+        include_occupancy_tables=normalized_section == "occupancy",
+        include_availability_rows=False,
+        include_onboarding=False,
+        include_alert_rows=False,
     )
     tables = get_reporting_tables(
         session,
         start_date=report_start,
         end_date=report_end,
         currency=currency,
+        include_finance=normalized_section == "finance",
+        include_occupancy=normalized_section == "occupancy",
+        include_conversion=normalized_section == "conversion",
+        academic_year_id=academic_year_id,
+        tenant_query=tenant_query,
+        aging_page=aging_page,
+        finance_page=finance_page,
+        room_page=room_page,
     )
     return ReportsOverviewResponse(
         start_date=report_start.isoformat(),
@@ -75,9 +95,21 @@ def get_reports_overview(
         floor_occupancy_rows=snapshot.floor_occupancy_rows,
         collections_by_method=tables["collections_by_method"],
         aging_rows=tables["aging_rows"],
+        aging_total=int(tables["aging_total"]),
+        aging_page=int(tables["aging_page"]),
+        aging_page_size=int(tables["aging_page_size"]),
         room_utilization=tables["room_utilization"],
+        room_utilization_total=int(tables["room_utilization_total"]),
+        room_page=int(tables["room_page"]),
+        room_page_size=int(tables["room_page_size"]),
         conversion_rows=tables["conversion_rows"],
         tenant_finance_rows=tables["tenant_finance_rows"],
+        tenant_finance_total=int(tables["tenant_finance_total"]),
+        finance_page=int(tables["finance_page"]),
+        finance_page_size=int(tables["finance_page_size"]),
+        available_academic_years=tables["available_academic_years"],
+        selected_academic_year_id=tables["selected_academic_year_id"],
+        tenant_query=tables["tenant_query"],
     )
 
 
@@ -85,6 +117,8 @@ def get_reports_overview(
 def download_finance_export(
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
+    academic_year_id: int | None = Query(default=None),
+    tenant_query: str = Query(default=""),
     session: Session = Depends(get_db_session),
     _user: dict = Depends(require_admin),
 ) -> Response:
@@ -101,12 +135,15 @@ def download_finance_export(
         start_date=report_start,
         end_date=report_end,
         currency=get_base_currency(),
+        academic_year_id=academic_year_id,
+        tenant_query=tenant_query,
+        finance_page_size=None,
     )
     filename = f"tenant-finance-{report_start.isoformat()}-{report_end.isoformat()}.csv"
     return _csv_response(
         tables["tenant_finance_rows"],
         filename,
-        ["Tenant", "Invoice", "Payment", "Receipt", "Paid on", "Amount", "Balance"],
+        ["Academic year", "Tenant", "Invoice", "Payment", "Receipt", "Paid on", "Payment amount", "Allocated", "Unallocated", "Balance"],
     )
 
 
@@ -130,6 +167,7 @@ def download_collections_export(
         start_date=report_start,
         end_date=report_end,
         currency=get_base_currency(),
+        aging_page_size=None,
     )
     return _csv_response(
         tables["collections_by_method"],
@@ -158,6 +196,7 @@ def download_receivables_export(
         start_date=report_start,
         end_date=report_end,
         currency=get_base_currency(),
+        aging_page_size=None,
     )
     return _csv_response(
         tables["aging_rows"],
@@ -188,6 +227,9 @@ def download_block_occupancy_export(
         start_date=report_start,
         end_date=report_end,
         include_occupancy_tables=True,
+        include_availability_rows=False,
+        include_onboarding=False,
+        include_alert_rows=False,
     )
     return _csv_response(
         snapshot.block_occupancy_rows,
@@ -218,6 +260,9 @@ def download_floor_occupancy_export(
         start_date=report_start,
         end_date=report_end,
         include_occupancy_tables=True,
+        include_availability_rows=False,
+        include_onboarding=False,
+        include_alert_rows=False,
     )
     return _csv_response(
         snapshot.floor_occupancy_rows,
@@ -246,6 +291,7 @@ def download_room_utilization_export(
         start_date=report_start,
         end_date=report_end,
         currency=get_base_currency(),
+        room_page_size=None,
     )
     return _csv_response(
         tables["room_utilization"],

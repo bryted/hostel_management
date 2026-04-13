@@ -165,7 +165,7 @@ export function SettingsActions({ overview }: Props) {
 
   return (
     <div className="grid two">
-      <section className="panel">
+      <section className="panel workspace-panel primary">
         <h3>Controls</h3>
         <div className="stack">
           <div className="action-card">
@@ -570,7 +570,7 @@ export function SettingsActions({ overview }: Props) {
         </div>
       </section>
 
-      <section className="panel">
+      <section className="panel workspace-panel secondary">
         <h3>Users</h3>
         <div className="stack">
           <div className="action-card">

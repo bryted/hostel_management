@@ -5,6 +5,7 @@ from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -16,11 +17,15 @@ from app.models import (
     Invoice,
     InvoiceEvent,
     Payment,
+    PaymentAllocation,
     Receipt,
     Tenant,
     TenantEvent,
 )
-from app.services.common import format_money
+from app.services.academic_years import resolve_academic_year
+from app.services.common import bed_is_in_operational_inventory, format_money
+
+UNSETTLED_TENANT_INVOICE_STATUSES = ("draft", "submitted", "approved", "partially_paid")
 
 
 def _log_invoice_event(session: Session, invoice_id: int, event_type: str, payload: dict[str, Any]) -> None:
@@ -73,6 +78,60 @@ def _log_allocation_event(
             detail_json=detail,
         )
     )
+
+
+def get_tenant_workflow_flags(session: Session, tenant_id: int) -> dict[str, bool]:
+    paid_invoice_subq = (
+        select(PaymentAllocation.invoice_id.label("invoice_id"))
+        .join(Payment, Payment.id == PaymentAllocation.payment_id)
+        .where(
+            Payment.status != "voided",
+            Payment.paid_at.is_not(None),
+        )
+        .group_by(PaymentAllocation.invoice_id)
+        .subquery()
+    )
+    has_confirmed_allocation = session.execute(
+        select(Allocation.id).where(Allocation.tenant_id == tenant_id, Allocation.status == "CONFIRMED").limit(1)
+    ).scalar_one_or_none() is not None
+    has_active_reservation = session.execute(
+        select(BedReservation.id).where(BedReservation.tenant_id == tenant_id, BedReservation.status == "ACTIVE").limit(1)
+    ).scalar_one_or_none() is not None
+    has_unsettled_invoice = session.execute(
+        select(Invoice.id)
+        .where(Invoice.tenant_id == tenant_id, Invoice.status.in_(UNSETTLED_TENANT_INVOICE_STATUSES))
+        .limit(1)
+    ).scalar_one_or_none() is not None
+    has_paid_unallocated_invoice = session.execute(
+        select(Invoice.id)
+        .join(paid_invoice_subq, paid_invoice_subq.c.invoice_id == Invoice.id)
+        .where(
+            Invoice.tenant_id == tenant_id,
+            Invoice.status.not_in(["rejected", "cancelled"]),
+            ~sa.exists(
+                select(Allocation.id).where(
+                    Allocation.invoice_id == Invoice.id,
+                    Allocation.status == "CONFIRMED",
+                )
+            ),
+        )
+        .limit(1)
+    ).scalar_one_or_none() is not None
+    return {
+        "has_confirmed_allocation": has_confirmed_allocation,
+        "has_active_reservation": has_active_reservation,
+        "has_unsettled_invoice": has_unsettled_invoice,
+        "has_paid_unallocated_invoice": has_paid_unallocated_invoice,
+    }
+
+
+def derive_tenant_status(session: Session, tenant_id: int) -> str:
+    flags = get_tenant_workflow_flags(session, tenant_id)
+    if flags["has_confirmed_allocation"] or flags["has_paid_unallocated_invoice"]:
+        return "active"
+    if flags["has_active_reservation"] or flags["has_unsettled_invoice"]:
+        return "prospect"
+    return "inactive"
 
 
 def summarize_detail(detail: dict[str, Any] | None) -> str:
@@ -145,6 +204,10 @@ def cancel_reservation_hold(
     reservation.cancelled_at = now
     reservation.cancelled_by = user_id
     reservation.cancel_reason = reason.strip() or "Cancelled from workspace"
+    if reservation.invoice_id is not None:
+        invoice = session.get(Invoice, reservation.invoice_id)
+        if invoice is not None and invoice.reserved_bed_id == reservation.bed_id:
+            invoice.reserved_bed_id = None
     bed = session.get(Bed, reservation.bed_id)
     if bed is not None and bed.status == "RESERVED":
         active_allocation = session.execute(
@@ -152,7 +215,11 @@ def cancel_reservation_hold(
         ).scalar_one_or_none()
         if active_allocation is None:
             bed.status = "AVAILABLE"
-    detail = {"reservation_id": reservation.id, "reason": reservation.cancel_reason}
+    detail = {
+        "reservation_id": reservation.id,
+        "reason": reservation.cancel_reason,
+        "hold_cleared": bool(reservation.invoice_id is not None),
+    }
     _log_bed_event(session, reservation.bed_id, "RESERVATION_CANCELLED", user_id, reservation.invoice_id, reservation.tenant_id, detail)
     if reservation.invoice_id:
         _log_invoice_event(session, reservation.invoice_id, "reservation_cancelled", detail)
@@ -191,12 +258,9 @@ def end_allocation_stay(
     if allocation.invoice_id:
         _log_invoice_event(session, allocation.invoice_id, "allocation_ended", detail)
     _log_tenant_event(session, allocation.tenant_id, "TENANT_MOVED_OUT", user_id, detail)
-    active_other_allocations = session.execute(
-        select(sa.func.count(Allocation.id)).where(Allocation.tenant_id == allocation.tenant_id, Allocation.status == "CONFIRMED")
-    ).scalar_one()
     tenant = session.get(Tenant, allocation.tenant_id)
-    if tenant is not None and int(active_other_allocations or 0) == 0:
-        tenant.status = "inactive"
+    if tenant is not None:
+        tenant.status = derive_tenant_status(session, int(tenant.id))
     return allocation
 
 
@@ -217,6 +281,8 @@ def transfer_allocation_bed(
     new_bed = session.get(Bed, new_bed_id)
     if new_bed is None:
         raise ValueError("Target bed not found.")
+    if not bed_is_in_operational_inventory(session, int(new_bed.id)):
+        raise ValueError("Target bed is in inactive inventory.")
     if new_bed.status in {"OUT_OF_SERVICE", "OCCUPIED"}:
         raise ValueError("Target bed is not available for transfer.")
     conflicting_allocation = session.execute(
@@ -243,10 +309,14 @@ def transfer_allocation_bed(
     allocation.ended_reason = f"Transferred: {reason.strip() or 'bed change'}"
     if old_bed is not None and old_bed.status == "OCCUPIED":
         old_bed.status = "AVAILABLE"
+    invoice = session.get(Invoice, allocation.invoice_id) if allocation.invoice_id is not None else None
     new_allocation = Allocation(
         bed_id=new_bed.id,
         tenant_id=allocation.tenant_id,
         invoice_id=allocation.invoice_id,
+        academic_year_id=allocation.academic_year_id
+        or (invoice.academic_year_id if invoice is not None else None)
+        or resolve_academic_year(session, as_of=now).id,
         status="CONFIRMED",
         start_date=now,
     )
@@ -254,7 +324,6 @@ def transfer_allocation_bed(
     session.flush()
     new_bed.status = "OCCUPIED"
     if allocation.invoice_id:
-        invoice = session.get(Invoice, allocation.invoice_id)
         if invoice is not None:
             invoice.reserved_bed_id = new_bed.id
         active_reservations = session.execute(
@@ -317,73 +386,134 @@ def set_bed_maintenance_status(
     return bed
 
 
-def get_tenant_timeline_rows(session: Session, tenant_id: int) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
+def get_tenant_timeline_rows(
+    session: Session,
+    tenant_id: int,
+    *,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[int, list[dict[str, Any]]]:
+    null_json = sa.cast(sa.null(), JSONB)
+    null_string = sa.cast(sa.null(), sa.String())
+    null_integer = sa.cast(sa.null(), sa.Integer())
+    null_numeric = sa.cast(sa.null(), sa.Numeric(12, 2))
 
-    tenant_events = session.execute(
-        select(TenantEvent).where(TenantEvent.tenant_id == tenant_id).order_by(TenantEvent.event_at.desc()).limit(20)
-    ).scalars().all()
-    for event in tenant_events:
-        rows.append({"When": event.event_at, "Source": "Tenant", "Event": event.event_type, "Detail": summarize_detail(event.detail_json)})
+    timeline_union = sa.union_all(
+        select(
+            TenantEvent.event_at.label("when_value"),
+            sa.literal("Tenant").label("source"),
+            TenantEvent.event_type.label("event"),
+            TenantEvent.detail_json.label("detail_json"),
+            null_numeric.label("amount"),
+            null_string.label("currency"),
+            null_string.label("method"),
+            null_string.label("reference"),
+            null_string.label("status"),
+            null_integer.label("printed_count"),
+        ).where(TenantEvent.tenant_id == tenant_id),
+        select(
+            InvoiceEvent.event_at.label("when_value"),
+            sa.literal("Invoice").label("source"),
+            InvoiceEvent.event_type.label("event"),
+            InvoiceEvent.payload.label("detail_json"),
+            null_numeric.label("amount"),
+            null_string.label("currency"),
+            null_string.label("method"),
+            null_string.label("reference"),
+            null_string.label("status"),
+            null_integer.label("printed_count"),
+        )
+        .join(Invoice, Invoice.id == InvoiceEvent.invoice_id)
+        .where(Invoice.tenant_id == tenant_id),
+        select(
+            AllocationEvent.created_at.label("when_value"),
+            sa.literal("Allocation").label("source"),
+            AllocationEvent.event_type.label("event"),
+            AllocationEvent.detail_json.label("detail_json"),
+            null_numeric.label("amount"),
+            null_string.label("currency"),
+            null_string.label("method"),
+            null_string.label("reference"),
+            null_string.label("status"),
+            null_integer.label("printed_count"),
+        )
+        .join(Allocation, Allocation.id == AllocationEvent.allocation_id)
+        .where(Allocation.tenant_id == tenant_id),
+        select(
+            BedEvent.created_at.label("when_value"),
+            sa.literal("Bed").label("source"),
+            BedEvent.event_type.label("event"),
+            BedEvent.detail_json.label("detail_json"),
+            null_numeric.label("amount"),
+            null_string.label("currency"),
+            null_string.label("method"),
+            null_string.label("reference"),
+            null_string.label("status"),
+            null_integer.label("printed_count"),
+        ).where(BedEvent.tenant_id == tenant_id),
+        select(
+            sa.func.coalesce(Payment.paid_at, Payment.created_at).label("when_value"),
+            sa.literal("Payment").label("source"),
+            Payment.payment_no.label("event"),
+            null_json.label("detail_json"),
+            Payment.amount.label("amount"),
+            Payment.currency.label("currency"),
+            Payment.method.label("method"),
+            Payment.reference.label("reference"),
+            Payment.status.label("status"),
+            null_integer.label("printed_count"),
+        ).where(Payment.tenant_id == tenant_id),
+        select(
+            sa.func.coalesce(Receipt.issued_at, Receipt.created_at).label("when_value"),
+            sa.literal("Receipt").label("source"),
+            Receipt.receipt_no.label("event"),
+            null_json.label("detail_json"),
+            Receipt.amount.label("amount"),
+            Receipt.currency.label("currency"),
+            null_string.label("method"),
+            null_string.label("reference"),
+            null_string.label("status"),
+            Receipt.printed_count.label("printed_count"),
+        ).where(Receipt.tenant_id == tenant_id),
+    ).subquery()
 
-    invoice_ids = session.execute(select(Invoice.id).where(Invoice.tenant_id == tenant_id)).scalars().all()
-    if invoice_ids:
-        invoice_events = session.execute(
-            select(InvoiceEvent).where(InvoiceEvent.invoice_id.in_(invoice_ids)).order_by(InvoiceEvent.event_at.desc()).limit(20)
-        ).scalars().all()
-        for event in invoice_events:
-            rows.append({"When": event.event_at, "Source": "Invoice", "Event": event.event_type, "Detail": summarize_detail(event.payload)})
+    total = int(
+        session.execute(select(sa.func.count()).select_from(timeline_union)).scalar_one() or 0
+    )
+    rows = session.execute(
+        select(timeline_union)
+        .order_by(timeline_union.c.when_value.desc(), timeline_union.c.source.asc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
 
-        allocation_events = session.execute(
-            select(AllocationEvent, Allocation)
-            .join(Allocation, Allocation.id == AllocationEvent.allocation_id)
-            .where(Allocation.tenant_id == tenant_id)
-            .order_by(AllocationEvent.created_at.desc())
-            .limit(20)
-        ).all()
-        for event, allocation in allocation_events:
-            detail = dict(event.detail_json or {})
-            detail.setdefault("allocation_id", allocation.id)
-            rows.append({"When": event.created_at, "Source": "Allocation", "Event": event.event_type, "Detail": summarize_detail(detail)})
-
-    bed_events = session.execute(
-        select(BedEvent).where(BedEvent.tenant_id == tenant_id).order_by(BedEvent.created_at.desc()).limit(20)
-    ).scalars().all()
-    for event in bed_events:
-        rows.append({"When": event.created_at, "Source": "Bed", "Event": event.event_type, "Detail": summarize_detail(event.detail_json)})
-
-    payments = session.execute(
-        select(Payment).where(Payment.tenant_id == tenant_id).order_by(sa.func.coalesce(Payment.paid_at, Payment.created_at).desc()).limit(20)
-    ).scalars().all()
-    for payment in payments:
-        rows.append(
+    formatted_rows: list[dict[str, Any]] = []
+    for row in rows:
+        detail = ""
+        if row.source in {"Tenant", "Invoice", "Allocation", "Bed"}:
+            detail = summarize_detail(row.detail_json)
+        elif row.source == "Payment":
+            detail = summarize_detail(
+                {
+                    "amount": format_money(row.amount, row.currency),
+                    "method": row.method or "",
+                    "reference": row.reference or "",
+                    "status": row.status or "",
+                }
+            )
+        elif row.source == "Receipt":
+            detail = summarize_detail(
+                {
+                    "amount": format_money(row.amount, row.currency),
+                    "printed": int(row.printed_count or 0),
+                }
+            )
+        formatted_rows.append(
             {
-                "When": payment.paid_at or payment.created_at,
-                "Source": "Payment",
-                "Event": payment.payment_no,
-                "Detail": summarize_detail(
-                    {
-                        "amount": format_money(payment.amount, payment.currency),
-                        "method": payment.method or "",
-                        "reference": payment.reference or "",
-                        "status": payment.status,
-                    }
-                ),
+                "When": format_timestamp(row.when_value),
+                "Source": row.source,
+                "Event": row.event,
+                "Detail": detail,
             }
         )
-
-    receipts = session.execute(
-        select(Receipt).where(Receipt.tenant_id == tenant_id).order_by(sa.func.coalesce(Receipt.issued_at, Receipt.created_at).desc()).limit(20)
-    ).scalars().all()
-    for receipt in receipts:
-        rows.append(
-            {
-                "When": receipt.issued_at or receipt.created_at,
-                "Source": "Receipt",
-                "Event": receipt.receipt_no,
-                "Detail": summarize_detail({"amount": format_money(receipt.amount, receipt.currency), "printed": int(receipt.printed_count or 0)}),
-            }
-        )
-
-    rows.sort(key=lambda item: item["When"] or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
-    return [{"When": format_timestamp(row["When"]), "Source": row["Source"], "Event": row["Event"], "Detail": row["Detail"]} for row in rows[:40]]
+    return total, formatted_rows

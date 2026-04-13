@@ -24,6 +24,15 @@ class UserResponse(BaseModel):
     tenant_id: int | None
 
 
+class AcademicYearSummary(BaseModel):
+    id: int
+    label: str
+    start_date: str
+    end_date: str
+    is_current: bool
+    is_closed: bool
+
+
 class DashboardSummaryResponse(BaseModel):
     start_date: str
     end_date: str
@@ -42,6 +51,7 @@ class DashboardSummaryResponse(BaseModel):
     prospects: int
     approved_unpaid: int
     paid_unallocated: int
+    current_academic_year: str | None = None
 
 
 class TenantListItem(BaseModel):
@@ -51,6 +61,16 @@ class TenantListItem(BaseModel):
     phone: str | None
     status: str
     room: str | None = None
+
+
+class TenantListResponse(BaseModel):
+    rows: list[TenantListItem]
+    total: int
+    page: int
+    page_size: int
+    active_total: int
+    prospect_total: int
+    inactive_total: int
 
 
 class InvoiceSummary(BaseModel):
@@ -63,6 +83,7 @@ class InvoiceSummary(BaseModel):
     issued_at: str | None
     due_at: str | None
     can_allocate: bool
+    academic_year: str | None = None
 
 
 class PaymentSummary(BaseModel):
@@ -73,6 +94,10 @@ class PaymentSummary(BaseModel):
     reference: str | None
     status: str
     paid_at: str | None
+    academic_year: str | None = None
+    invoice_summary: str | None = None
+    allocated_total: str | None = None
+    unallocated_amount: str | None = None
 
 
 class ReceiptSummary(BaseModel):
@@ -81,6 +106,8 @@ class ReceiptSummary(BaseModel):
     amount: str
     issued_at: str | None
     printed_count: int
+    academic_year: str | None = None
+    invoice_summary: str | None = None
 
 
 class BedOption(BaseModel):
@@ -104,6 +131,7 @@ class ReservationSummary(BaseModel):
     bed: str
     expires_at: str | None
     extension_count: int
+    academic_year: str | None = None
 
 
 class AllocationSummary(BaseModel):
@@ -116,6 +144,7 @@ class AllocationSummary(BaseModel):
     room: str
     bed: str
     start_date: str | None
+    academic_year: str | None = None
 
 
 class TimelineRow(BaseModel):
@@ -128,11 +157,23 @@ class TimelineRow(BaseModel):
 class TenantWorkspaceResponse(BaseModel):
     tenant: TenantListItem
     invoices: list[InvoiceSummary]
+    invoice_total: int
+    invoice_page: int
+    invoice_page_size: int
     payments: list[PaymentSummary]
+    payment_total: int
+    payment_page: int
+    payment_page_size: int
     receipts: list[ReceiptSummary]
+    receipt_total: int
+    receipt_page: int
+    receipt_page_size: int
     active_reservation: ReservationSummary | None
     active_allocation: AllocationSummary | None
     timeline: list[TimelineRow]
+    timeline_total: int
+    timeline_page: int
+    timeline_page_size: int
     available_beds: list[BedOption]
     allocatable_invoices: list[InvoiceSummary]
     next_action: str
@@ -157,6 +198,17 @@ class BedListItem(BaseModel):
     allocation_start: str | None
 
 
+class BedListResponse(BaseModel):
+    rows: list[BedListItem]
+    total: int
+    page: int
+    page_size: int
+    available_total: int
+    reserved_total: int
+    occupied_total: int
+    out_of_service_total: int
+
+
 class BillingInvoiceItem(BaseModel):
     id: int
     invoice_no: str
@@ -171,6 +223,7 @@ class BillingInvoiceItem(BaseModel):
     hold_expired: bool = False
     hold_expires_at: str | None = None
     hold_hours_left: int | None = None
+    academic_year: str | None = None
 
 
 class BillingPaymentItem(BaseModel):
@@ -186,6 +239,10 @@ class BillingPaymentItem(BaseModel):
     status: str
     paid_at: str | None
     can_void: bool = False
+    academic_year: str | None = None
+    invoice_summary: str | None = None
+    allocated_total: str | None = None
+    unallocated_amount: str | None = None
 
 
 class BillingReceiptItem(BaseModel):
@@ -200,6 +257,21 @@ class BillingReceiptItem(BaseModel):
     amount: str
     issued_at: str | None
     printed_count: int
+    academic_year: str | None = None
+    invoice_summary: str | None = None
+
+
+class PaymentAllocationRequest(BaseModel):
+    invoice_id: int
+    amount: Decimal = Field(gt=0)
+
+
+class RecordTenantPaymentRequest(BaseModel):
+    tenant_id: int
+    amount: Decimal = Field(gt=0)
+    method: str
+    reference: str = ""
+    allocations: list[PaymentAllocationRequest] = Field(default_factory=list)
 
 
 class BillingOverviewResponse(BaseModel):
@@ -318,6 +390,7 @@ class ReceiptDetailResponse(BaseModel):
     tenant: TenantListItem
     payment: PaymentSummary | None
     invoice: BillingInvoiceItem | None
+    allocations: list[TableRow] = Field(default_factory=list)
     paid_before: str | None
     balance_after: str | None
     received_by: str | None
@@ -449,9 +522,21 @@ class ReportsOverviewResponse(BaseModel):
     floor_occupancy_rows: list[TableRow]
     collections_by_method: list[TableRow]
     aging_rows: list[TableRow]
+    aging_total: int
+    aging_page: int
+    aging_page_size: int
     room_utilization: list[TableRow]
+    room_utilization_total: int
+    room_page: int
+    room_page_size: int
     conversion_rows: list[TableRow]
     tenant_finance_rows: list[TableRow]
+    tenant_finance_total: int
+    finance_page: int
+    finance_page_size: int
+    available_academic_years: list[AcademicYearSummary] = Field(default_factory=list)
+    selected_academic_year_id: int | None = None
+    tenant_query: str = ""
 
 
 class NotificationSettingsPayload(BaseModel):
@@ -576,6 +661,7 @@ class SettingsOverviewResponse(BaseModel):
     worker_status: WorkerStatus
     cashier_scope: list[str]
     admin_scope: list[str]
+    academic_years: list[AcademicYearSummary] = Field(default_factory=list)
 
 
 class CreateUserRequest(BaseModel):

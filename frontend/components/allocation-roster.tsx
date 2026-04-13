@@ -85,101 +85,103 @@ export function AllocationRoster({ rows }: Props) {
     <div className="stack">
       {message ? <p className="success-text">{message}</p> : null}
       {error ? <p className="error-text">{error}</p> : null}
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Tenant</th>
-            <th>Invoice</th>
-            <th>Location</th>
-            <th>Start</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.length ? (
-            rows.map((row) => (
-              <tr key={row.allocation_id}>
-                <td>
-                  <div className="stack tight">
-                    <strong>{row.tenant_name}</strong>
-                    <span className="small">#{row.allocation_id}</span>
-                  </div>
-                </td>
-                <td>{row.invoice_no ?? "-"}</td>
-                <td>
-                  {row.block} / {row.floor} / {row.room} / {row.bed}
-                </td>
-                <td>{row.start_date ?? "-"}</td>
-                <td>
-                  <div className="stack tight">
-                    <div className="inline-actions">
-                      <Link className="button small ghost" href={`/tenants/${row.tenant_id}`}>
-                        Workspace
-                      </Link>
-                      <button
-                        className="button small"
-                        disabled={pendingKey === `${row.allocation_id}:end`}
-                        onClick={() => runAction(row.allocation_id, "end")}
-                        type="button"
-                      >
-                        End stay
-                      </button>
+      <div className="table-scroll">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Tenant</th>
+              <th>Invoice</th>
+              <th>Location</th>
+              <th>Start</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length ? (
+              rows.map((row) => (
+                <tr key={row.allocation_id}>
+                  <td>
+                    <div className="stack tight">
+                      <strong>{row.tenant_name}</strong>
+                      <span className="small">#{row.allocation_id}</span>
                     </div>
-                    <input
-                      value={reasons[row.allocation_id] ?? ""}
-                      onChange={(event) =>
-                        setReasons((current) => ({
-                          ...current,
-                          [row.allocation_id]: event.target.value,
-                        }))
-                      }
-                      placeholder="Reason"
-                    />
-                    {row.transfer_targets.length ? (
+                  </td>
+                  <td>{row.invoice_no ?? "-"}</td>
+                  <td>
+                    {row.block} / {row.floor} / {row.room} / {row.bed}
+                  </td>
+                  <td>{row.start_date ?? "-"}</td>
+                  <td>
+                    <div className="stack tight">
                       <div className="inline-actions">
-                        <select
-                          value={targets[row.allocation_id] ?? ""}
-                          onChange={(event) =>
-                            setTargets((current) => ({
-                              ...current,
-                              [row.allocation_id]: event.target.value,
-                            }))
-                          }
-                        >
-                          {row.transfer_targets.map((target) => (
-                            <option key={target.bed_id} value={target.bed_id}>
-                              {target.label}
-                            </option>
-                          ))}
-                        </select>
+                        <Link className="button small ghost" href={`/tenants/${row.tenant_id}`}>
+                          Workspace
+                        </Link>
                         <button
-                          className="button small secondary"
-                          disabled={
-                            pendingKey === `${row.allocation_id}:transfer` ||
-                            !targets[row.allocation_id]
-                          }
-                          onClick={() => runAction(row.allocation_id, "transfer")}
+                          className="button small"
+                          disabled={pendingKey === `${row.allocation_id}:end`}
+                          onClick={() => runAction(row.allocation_id, "end")}
                           type="button"
                         >
-                          Transfer
+                          End stay
                         </button>
                       </div>
-                    ) : (
-                      <span className="small">No eligible transfer beds.</span>
-                    )}
-                  </div>
+                      <input
+                        value={reasons[row.allocation_id] ?? ""}
+                        onChange={(event) =>
+                          setReasons((current) => ({
+                            ...current,
+                            [row.allocation_id]: event.target.value,
+                          }))
+                        }
+                        placeholder="Reason"
+                      />
+                      {row.transfer_targets.length ? (
+                        <div className="inline-actions">
+                          <select
+                            value={targets[row.allocation_id] ?? ""}
+                            onChange={(event) =>
+                              setTargets((current) => ({
+                                ...current,
+                                [row.allocation_id]: event.target.value,
+                              }))
+                            }
+                          >
+                            {row.transfer_targets.map((target) => (
+                              <option key={target.bed_id} value={target.bed_id}>
+                                {target.label}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            className="button small secondary"
+                            disabled={
+                              pendingKey === `${row.allocation_id}:transfer` ||
+                              !targets[row.allocation_id]
+                            }
+                            onClick={() => runAction(row.allocation_id, "transfer")}
+                            type="button"
+                          >
+                            Transfer
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="small">No eligible transfer beds.</span>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={5} className="small">
+                  No active allocations match the current filter.
                 </td>
               </tr>
-            ))
-          ) : (
-            <tr>
-              <td colSpan={5} className="small">
-                No active allocations match the current filter.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

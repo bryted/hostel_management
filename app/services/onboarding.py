@@ -6,7 +6,7 @@ import sqlalchemy as sa
 from sqlalchemy import select
 from sqlalchemy.orm import Session, aliased
 
-from app.models import Allocation, Bed, BedReservation, Invoice, Payment, Room, Tenant, TenantEvent
+from app.models import Allocation, Bed, BedReservation, Invoice, Payment, PaymentAllocation, Room, Tenant, TenantEvent
 from app.services.reservations import invoice_hold_expired
 from app.services.types import ConversionResult, OnboardingPipelineSnapshot
 
@@ -14,11 +14,12 @@ from app.services.types import ConversionResult, OnboardingPipelineSnapshot
 def _paid_totals_subquery() -> sa.Subquery:
     return (
         select(
-            Payment.invoice_id.label("invoice_id"),
-            sa.func.coalesce(sa.func.sum(Payment.amount), 0).label("paid_total"),
+            PaymentAllocation.invoice_id.label("invoice_id"),
+            sa.func.coalesce(sa.func.sum(PaymentAllocation.allocated_amount), 0).label("paid_total"),
         )
+        .join(Payment, Payment.id == PaymentAllocation.payment_id)
         .where(Payment.status != "voided")
-        .group_by(Payment.invoice_id)
+        .group_by(PaymentAllocation.invoice_id)
         .subquery()
     )
 
@@ -111,6 +112,50 @@ def _queue_base_query(
     return queue_query
 
 
+def _scoped_tenant_ids_subquery(
+    block_id: int | None = None,
+    floor_id: int | None = None,
+) -> sa.Subquery | None:
+    if block_id is None and floor_id is None:
+        return None
+
+    room_filters: list[sa.ColumnElement[bool]] = []
+    if block_id is not None:
+        room_filters.append(Room.block_id == block_id)
+    if floor_id is not None:
+        room_filters.append(Room.floor_id == floor_id)
+
+    invoice_scope = (
+        select(Invoice.tenant_id.label("tenant_id"))
+        .join(Bed, Bed.id == Invoice.reserved_bed_id)
+        .join(Room, Room.id == Bed.room_id)
+        .where(
+            Invoice.reserved_bed_id.is_not(None),
+            Invoice.status.in_(["draft", "submitted", "approved", "partially_paid", "paid"]),
+            *room_filters,
+        )
+    )
+    reservation_scope = (
+        select(BedReservation.tenant_id.label("tenant_id"))
+        .join(Bed, Bed.id == BedReservation.bed_id)
+        .join(Room, Room.id == Bed.room_id)
+        .where(
+            BedReservation.status == "ACTIVE",
+            *room_filters,
+        )
+    )
+    allocation_scope = (
+        select(Allocation.tenant_id.label("tenant_id"))
+        .join(Bed, Bed.id == Allocation.bed_id)
+        .join(Room, Room.id == Bed.room_id)
+        .where(
+            Allocation.status == "CONFIRMED",
+            *room_filters,
+        )
+    )
+    return sa.union(invoice_scope, reservation_scope, allocation_scope).subquery()
+
+
 def get_onboarding_queue_counts(
     session: Session,
     *,
@@ -143,10 +188,14 @@ def get_onboarding_pipeline(
     floor_id: int | None = None,
 ) -> OnboardingPipelineSnapshot:
     now = as_of or datetime.now(timezone.utc)
+    scoped_tenants = _scoped_tenant_ids_subquery(block_id=block_id, floor_id=floor_id)
 
-    prospects = session.execute(
-        select(sa.func.count(Tenant.id)).where(Tenant.status == "prospect")
-    ).scalar_one()
+    prospects_query = select(sa.func.count(Tenant.id)).where(Tenant.status == "prospect")
+    if scoped_tenants is not None:
+        prospects_query = prospects_query.where(
+            Tenant.id.in_(select(scoped_tenants.c.tenant_id))
+        )
+    prospects = session.execute(prospects_query).scalar_one()
 
     queue_counts = get_onboarding_queue_counts(
         session,
@@ -174,12 +223,15 @@ def get_onboarding_pipeline(
     active_allocated_tenants = session.execute(active_allocated_query).scalar_one()
 
     activation_events = ["TENANT_ACTIVATED_PENDING_ALLOCATION", "TENANT_CONFIRMED"]
-    newly_activated_last_7d = session.execute(
-        select(sa.func.count(sa.distinct(TenantEvent.tenant_id))).where(
-            TenantEvent.event_type.in_(activation_events),
-            TenantEvent.event_at >= (now - timedelta(days=7)),
+    activation_query = select(sa.func.count(sa.distinct(TenantEvent.tenant_id))).where(
+        TenantEvent.event_type.in_(activation_events),
+        TenantEvent.event_at >= (now - timedelta(days=7)),
+    )
+    if scoped_tenants is not None:
+        activation_query = activation_query.where(
+            TenantEvent.tenant_id.in_(select(scoped_tenants.c.tenant_id))
         )
-    ).scalar_one()
+    newly_activated_last_7d = session.execute(activation_query).scalar_one()
 
     return OnboardingPipelineSnapshot(
         prospects=int(prospects or 0),

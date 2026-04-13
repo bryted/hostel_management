@@ -8,6 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Allocation, Bed, BedEvent, BedReservation, Invoice
+from app.services.academic_years import resolve_academic_year
+from app.services.common import bed_is_in_operational_inventory
 
 UNPAID_INVOICE_STATUSES = {"draft", "submitted", "approved", "partially_paid"}
 
@@ -49,19 +51,7 @@ def invoice_hold_expired(session: Session, invoice_id: int) -> bool:
         .where(BedReservation.invoice_id == invoice_id, BedReservation.status == "ACTIVE")
         .limit(1)
     ).scalar_one_or_none()
-    if active_reservation is not None:
-        return False
-
-    expired_reservation = session.execute(
-        select(BedReservation.id)
-        .where(BedReservation.invoice_id == invoice_id, BedReservation.status == "EXPIRED")
-        .limit(1)
-    ).scalar_one_or_none()
-    if expired_reservation is None:
-        return False
-
-    invoice = session.get(Invoice, invoice_id)
-    return invoice is not None and invoice.reserved_bed_id is None
+    return active_reservation is None
 
 
 def expired_hold_invoice_ids_query() -> sa.Select:
@@ -74,6 +64,20 @@ def expired_hold_invoice_ids_query() -> sa.Select:
             Invoice.reserved_bed_id.is_(None),
         )
         .group_by(BedReservation.invoice_id)
+    )
+
+
+def active_hold_reservations_subquery() -> sa.Subquery:
+    return (
+        select(
+            BedReservation.invoice_id.label("invoice_id"),
+            BedReservation.expires_at.label("expires_at"),
+        )
+        .where(
+            BedReservation.invoice_id.is_not(None),
+            BedReservation.status == "ACTIVE",
+        )
+        .subquery()
     )
 
 
@@ -106,15 +110,21 @@ def reserve_bed_for_invoice(
     user_id: int | None,
     now: datetime,
 ) -> BedReservation:
-    invoice = session.get(Invoice, invoice_id)
+    invoice = session.execute(
+        select(Invoice).where(Invoice.id == invoice_id).with_for_update()
+    ).scalar_one_or_none()
     if invoice is None:
         raise ValueError("Invoice not found for reservation.")
     if invoice.status not in UNPAID_INVOICE_STATUSES:
         raise ValueError("Reservation can only be created for unpaid invoices.")
 
-    bed = session.get(Bed, bed_id)
+    bed = session.execute(
+        select(Bed).where(Bed.id == bed_id).with_for_update()
+    ).scalar_one_or_none()
     if bed is None:
         raise ValueError("Bed not found.")
+    if not bed_is_in_operational_inventory(session, int(bed.id)):
+        raise ValueError("Bed is in inactive inventory.")
     if bed.status == "OUT_OF_SERVICE":
         raise ValueError("Bed is out of service.")
     if bed.status == "OCCUPIED":
@@ -143,6 +153,7 @@ def reserve_bed_for_invoice(
             sa.or_(BedReservation.invoice_id.is_(None), BedReservation.invoice_id != invoice_id),
         )
         .limit(1)
+        .with_for_update()
     ).scalar_one_or_none()
     if existing_tenant_reservation is not None:
         raise ValueError(
@@ -165,6 +176,7 @@ def reserve_bed_for_invoice(
             existing.extended_at = now
             existing.extended_by = user_id
             existing.extension_count = int(existing.extension_count or 0) + 1
+            invoice.reserved_bed_id = bed_id
             _log_bed_event(
                 session,
                 bed_id=bed_id,
@@ -206,6 +218,7 @@ def reserve_bed_for_invoice(
         bed_id=bed_id,
         tenant_id=tenant_id,
         invoice_id=invoice_id,
+        academic_year_id=invoice.academic_year_id or resolve_academic_year(session, as_of=hold_until).id,
         status="ACTIVE",
         reserved_at=now,
         expires_at=hold_until,
@@ -214,6 +227,7 @@ def reserve_bed_for_invoice(
     session.add(reservation)
     session.flush()
 
+    invoice.reserved_bed_id = bed.id
     bed.status = "RESERVED"
     _log_bed_event(
         session,

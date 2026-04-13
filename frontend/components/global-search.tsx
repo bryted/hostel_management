@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
 
 import type { SearchResponse, SearchResultItem } from "../lib/api";
 import { getJson } from "../lib/client-api";
@@ -27,6 +27,7 @@ export function GlobalSearch({ isAdmin }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query);
   const [results, setResults] = useState<SearchResultItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -37,7 +38,7 @@ export function GlobalSearch({ isAdmin }: Props) {
   }, [pathname]);
 
   useEffect(() => {
-    const trimmed = query.trim();
+    const trimmed = deferredQuery.trim();
     if (trimmed.length < 2) {
       setResults([]);
       setLoading(false);
@@ -45,20 +46,35 @@ export function GlobalSearch({ isAdmin }: Props) {
       return;
     }
     setLoading(true);
+    const controller = new AbortController();
     const timeout = window.setTimeout(async () => {
       try {
-        const response = await getJson<SearchResponse>(`/search?q=${encodeURIComponent(trimmed)}`);
-        setResults(response.results);
-        setActiveIndex(0);
+        const response = await getJson<SearchResponse>(`/search?q=${encodeURIComponent(trimmed)}`, {
+          signal: controller.signal,
+        });
+        startTransition(() => {
+          setResults(response.results);
+          setActiveIndex(0);
+        });
       } catch {
-        setResults([]);
-        setActiveIndex(0);
+        if (controller.signal.aborted) {
+          return;
+        }
+        startTransition(() => {
+          setResults([]);
+          setActiveIndex(0);
+        });
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
       }
-    }, 180);
-    return () => window.clearTimeout(timeout);
-  }, [query]);
+    }, 220);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [deferredQuery]);
 
   const groupedResults = useMemo(() => {
     const groups = new Map<string, SearchResultItem[]>();

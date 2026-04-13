@@ -9,6 +9,12 @@ type PageProps = {
   params: Promise<{ invoiceId: string }>;
 };
 
+function invoiceStatusLabel(status: string): string {
+  if (status === "partially_paid") return "Partially paid";
+  if (status === "submitted") return "Waiting for approval";
+  return status.replace("_", " ");
+}
+
 function toneForInvoiceStatus(status: string): "success" | "warning" | "accent" | "default" {
   if (status === "paid") return "success";
   if (status === "approved" || status === "partially_paid") return "warning";
@@ -57,7 +63,7 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
         }
         aside={
           <>
-            <StatusPill tone={toneForInvoiceStatus(detail.invoice.status)}>{detail.invoice.status}</StatusPill>
+            <StatusPill tone={toneForInvoiceStatus(detail.invoice.status)}>{invoiceStatusLabel(detail.invoice.status)}</StatusPill>
             {detail.hold_expired ? <StatusPill tone="warning">Hold expired</StatusPill> : null}
           </>
         }
@@ -65,7 +71,11 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
 
       <div className="grid two">
         {user.is_admin ? <InvoiceDetailActions detail={detail} /> : null}
-        <DataPanel title="Invoice">
+        <DataPanel
+          title="Invoice"
+          description="Confirm balance, room-hold state, and what needs to happen next before the resident can move forward."
+          tone="primary"
+        >
           <div className="meta-list">
             <div className="meta-row">
               <span>Total</span>
@@ -100,7 +110,7 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
           {detail.notes ? <p className="section-note">{detail.notes}</p> : null}
         </DataPanel>
 
-        <DataPanel title="Tenant">
+        <DataPanel title="Tenant" tone="supporting">
           <div className="meta-list">
             <div className="meta-row">
               <span>Name</span>
@@ -114,78 +124,82 @@ export default async function InvoiceDetailPage({ params }: PageProps) {
               <span>Phone</span>
               <strong>{detail.tenant.phone ?? "-"}</strong>
             </div>
-            <div className="meta-row">
-              <span>Status</span>
-              <strong>{detail.tenant.status}</strong>
-            </div>
-          </div>
+                <div className="meta-row">
+                  <span>Status</span>
+                  <strong>{detail.tenant.status === "active" ? "Checked in" : detail.tenant.status === "inactive" ? "Archived" : "Prospect"}</strong>
+                </div>
+              </div>
         </DataPanel>
       </div>
 
       <div className="grid two">
-        <DataPanel title="Payments">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Payment</th>
-                <th>Amount</th>
-                <th>Method</th>
-                <th>Reference</th>
-                <th>Paid on</th>
-              </tr>
-            </thead>
-            <tbody>
-              {detail.payments.length ? (
-                detail.payments.map((payment) => (
-                  <tr key={payment.id}>
-                    <td>{payment.payment_no}</td>
-                    <td>{payment.amount}</td>
-                    <td>{payment.method ?? "-"}</td>
-                    <td>{payment.reference ?? "-"}</td>
-                    <td>{payment.paid_at ?? "-"}</td>
-                  </tr>
-                ))
-              ) : (
+        <DataPanel title="Payments" tone="secondary">
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
                 <tr>
-                  <td className="small" colSpan={5}>
-                    No payments have been recorded yet.
-                  </td>
+                  <th>Payment</th>
+                  <th>Amount</th>
+                  <th>Method</th>
+                  <th>Reference</th>
+                  <th>Paid on</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </DataPanel>
-        <DataPanel title="Receipts">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Receipt</th>
-                <th>Amount</th>
-                <th>Issued</th>
-                <th>Printed</th>
-              </tr>
-            </thead>
-            <tbody>
-              {detail.receipts.length ? (
-                detail.receipts.map((receipt) => (
-                  <tr key={receipt.id}>
-                    <td>
-                      <Link href={`/receipts/${receipt.id}`}>{receipt.receipt_no}</Link>
+              </thead>
+              <tbody>
+                {detail.payments.length ? (
+                  detail.payments.map((payment) => (
+                    <tr key={payment.id}>
+                      <td>{payment.payment_no}</td>
+                      <td>{payment.amount}</td>
+                      <td>{payment.method ?? "-"}</td>
+                      <td>{payment.reference ?? "-"}</td>
+                      <td>{payment.paid_at ?? "-"}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td className="small" colSpan={5}>
+                      No payments have been recorded yet.
                     </td>
-                    <td>{receipt.amount}</td>
-                    <td>{receipt.issued_at ?? "-"}</td>
-                    <td>{receipt.printed_count}</td>
                   </tr>
-                ))
-              ) : (
+                )}
+              </tbody>
+            </table>
+          </div>
+        </DataPanel>
+        <DataPanel title="Receipts" tone="supporting">
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
                 <tr>
-                  <td className="small" colSpan={4}>
-                    No receipts have been issued yet.
-                  </td>
+                  <th>Receipt</th>
+                  <th>Amount</th>
+                  <th>Issued</th>
+                  <th>Printed</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {detail.receipts.length ? (
+                  detail.receipts.map((receipt) => (
+                    <tr key={receipt.id}>
+                      <td>
+                        <Link href={`/receipts/${receipt.id}`}>{receipt.receipt_no}</Link>
+                      </td>
+                      <td>{receipt.amount}</td>
+                      <td>{receipt.issued_at ?? "-"}</td>
+                      <td>{receipt.printed_count}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td className="small" colSpan={4}>
+                      No receipts have been issued yet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </DataPanel>
       </div>
     </div>

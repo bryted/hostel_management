@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.models import Allocation, Bed, BedReservation, Block, Floor, Invoice, Payment, Room, Tenant, User
+from app.models import Allocation, Bed, BedReservation, Block, Floor, Invoice, Payment, PaymentAllocation, Room, Tenant, User
+from app.services.academic_years import resolve_academic_year
 
 
 @pytest.fixture(scope="session")
@@ -57,7 +58,8 @@ def db_session(engine) -> Session:
         yield session
     finally:
         session.close()
-        transaction.rollback()
+        if transaction.is_active and connection.in_transaction():
+            transaction.rollback()
         connection.close()
 
 
@@ -159,9 +161,11 @@ def factory(db_session: Session):
         ) -> Invoice:
             counters["invoice"] += 1
             now = created_at or self.now()
+            academic_year = resolve_academic_year(db_session, as_of=now)
             invoice = Invoice(
                 tenant_id=tenant.id,
                 user_id=user.id if user else None,
+                academic_year_id=academic_year.id,
                 reserved_bed_id=reserved_bed.id if reserved_bed else None,
                 invoice_no=f"TINV-{suffix}-{counters['invoice']:04d}",
                 billing_year=now.year,
@@ -190,9 +194,11 @@ def factory(db_session: Session):
             paid_at: datetime | None = None,
         ) -> Payment:
             counters["payment"] += 1
+            academic_year = resolve_academic_year(db_session, as_of=paid_at or self.now())
             payment = Payment(
                 tenant_id=tenant.id,
                 invoice_id=invoice.id,
+                academic_year_id=invoice.academic_year_id or academic_year.id,
                 handled_by_user_id=user.id if user else None,
                 payment_no=f"TPAY-{suffix}-{counters['payment']:04d}",
                 amount=amount,
@@ -203,6 +209,18 @@ def factory(db_session: Session):
                 paid_at=paid_at or self.now(),
             )
             db_session.add(payment)
+            db_session.flush()
+            db_session.add(
+                PaymentAllocation(
+                    payment_id=payment.id,
+                    invoice_id=invoice.id,
+                    tenant_id=tenant.id,
+                    academic_year_id=invoice.academic_year_id or payment.academic_year_id,
+                    allocated_amount=amount,
+                    allocated_at=paid_at or self.now(),
+                    allocated_by_user_id=user.id if user else None,
+                )
+            )
             db_session.flush()
             return payment
 
@@ -216,10 +234,12 @@ def factory(db_session: Session):
             user: User | None = None,
         ) -> BedReservation:
             now = self.now()
+            academic_year = resolve_academic_year(db_session, as_of=expires_at or now)
             reservation = BedReservation(
                 bed_id=bed.id,
                 tenant_id=tenant.id,
                 invoice_id=invoice.id if invoice else None,
+                academic_year_id=(invoice.academic_year_id if invoice else None) or academic_year.id,
                 status=status,
                 reserved_at=now,
                 expires_at=expires_at or (now + timedelta(hours=24)),
@@ -237,10 +257,12 @@ def factory(db_session: Session):
             status: str = "CONFIRMED",
             user: User | None = None,
         ) -> Allocation:
+            academic_year = resolve_academic_year(db_session, as_of=self.now())
             allocation = Allocation(
                 bed_id=bed.id,
                 tenant_id=tenant.id,
                 invoice_id=invoice.id if invoice else None,
+                academic_year_id=(invoice.academic_year_id if invoice else None) or academic_year.id,
                 status=status,
                 start_date=self.now(),
                 ended_by=user.id if user else None,

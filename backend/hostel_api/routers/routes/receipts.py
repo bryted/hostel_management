@@ -8,11 +8,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import HostelProfile, Invoice, Payment, Receipt, ReceiptEvent, Tenant, User
+from app.models import HostelProfile, Invoice, Payment, PaymentAllocation, Receipt, ReceiptEvent, Tenant, User
 from app.notifications.providers import EmailProvider, SmsProvider, WhatsAppProvider
 from app.receipts import build_receipt_pdf
 from app.services.common import format_money, get_base_currency
-from app.services.invoicing import get_paid_total
+from app.services.invoicing import (
+    get_paid_total,
+    get_payment_unallocated_total,
+    payment_allocations_for_payment_ids,
+    payment_invoice_summary_text,
+)
 from app.services.lifecycle import format_timestamp
 from app.services.receipt_security import (
     build_receipt_verification_code,
@@ -50,7 +55,12 @@ def _billing_invoice_item(session: Session, invoice: Invoice, tenant: Tenant, cu
         balance=format_money(balance, currency),
         issued_at=format_timestamp(invoice.issued_at),
         due_at=format_timestamp(invoice.due_at),
+        academic_year=invoice.academic_year.label if invoice.academic_year is not None else None,
     )
+
+
+def _receipt_allocation_rows(session: Session, payment_id: int) -> list[tuple[PaymentAllocation, Invoice]]:
+    return payment_allocations_for_payment_ids(session, [payment_id]).get(int(payment_id), [])
 
 
 def _get_receipt_bundle(session: Session, receipt_id: int) -> tuple[Receipt, Tenant, Payment | None, Invoice | None]:
@@ -129,13 +139,15 @@ def get_receipt_detail(
 ) -> ReceiptDetailResponse:
     currency = get_base_currency()
     receipt, tenant, payment, invoice = _get_receipt_bundle(session, receipt_id)
+    allocation_rows = _receipt_allocation_rows(session, int(payment.id)) if payment is not None else []
+    payment_allocation_map = payment_allocations_for_payment_ids(session, [int(payment.id)]) if payment is not None else {}
 
     paid_before = None
     balance_after = None
-    if payment is not None and invoice is not None:
+    if payment is not None and invoice is not None and len(allocation_rows) == 1:
+        current_allocation_amount = Decimal(str(allocation_rows[0][0].allocated_amount or 0))
         total_paid = Decimal(str(get_paid_total(session, int(invoice.id))))
-        current_amount = Decimal(str(payment.amount or 0))
-        paid_before = format_money(total_paid - current_amount, payment.currency)
+        paid_before = format_money(total_paid - current_allocation_amount, payment.currency)
         balance_after = format_money(Decimal(str(invoice.total or 0)) - total_paid, payment.currency)
 
     actor_name = None
@@ -173,6 +185,14 @@ def get_receipt_detail(
         amount=format_money(receipt.amount, receipt.currency),
         issued_at=format_timestamp(receipt.issued_at or receipt.created_at),
         printed_count=int(receipt.printed_count or 0),
+        academic_year=receipt.academic_year.label if receipt.academic_year is not None else None,
+        invoice_summary=payment_invoice_summary_text(
+            session,
+            int(payment.id),
+            allocation_map=payment_allocation_map,
+        )
+        if payment is not None
+        else "-",
     )
 
     return ReceiptDetailResponse(
@@ -193,11 +213,35 @@ def get_receipt_detail(
                 reference=payment.reference,
                 status=payment.status,
                 paid_at=format_timestamp(payment.paid_at or payment.created_at),
+                academic_year=payment.academic_year.label if payment.academic_year is not None else None,
+                invoice_summary=payment_invoice_summary_text(
+                    session,
+                    int(payment.id),
+                    allocation_map=payment_allocation_map,
+                ),
+                allocated_total=format_money(
+                    Decimal(str(payment.amount or 0)) - get_payment_unallocated_total(session, payment),
+                    payment.currency,
+                ),
+                unallocated_amount=format_money(get_payment_unallocated_total(session, payment), payment.currency),
             )
             if payment is not None
             else None
         ),
-        invoice=_billing_invoice_item(session, invoice, tenant, currency) if invoice is not None else None,
+        invoice=_billing_invoice_item(session, invoice, tenant, currency) if invoice is not None and len(allocation_rows) == 1 else None,
+        allocations=[
+            {
+                "Invoice": allocation_invoice.invoice_no,
+                "Academic year": allocation_invoice.academic_year.label if allocation_invoice.academic_year is not None else "-",
+                "Allocated": format_money(allocation.allocated_amount, payment.currency if payment is not None else currency),
+                "Invoice total": format_money(allocation_invoice.total, allocation_invoice.currency),
+                "Invoice balance after": format_money(
+                    Decimal(str(allocation_invoice.total or 0)) - get_paid_total(session, int(allocation_invoice.id)),
+                    allocation_invoice.currency,
+                ),
+            }
+            for allocation, allocation_invoice in allocation_rows
+        ],
         paid_before=paid_before,
         balance_after=balance_after,
         received_by=actor_name,
@@ -261,10 +305,13 @@ def send_receipt_sms(
     ]
     if tenant.name:
         message_lines.insert(0, f"{tenant.name}, payment received.")
+    payment_invoice_summary = (
+        payment_invoice_summary_text(session, int(payment.id)) if payment is not None else "-"
+    )
     if payment is not None and payment.payment_no:
         message_lines.append(f"Payment: {payment.payment_no}")
-    if invoice is not None and invoice.invoice_no:
-        message_lines.append(f"Invoice: {invoice.invoice_no}")
+    if payment_invoice_summary and payment_invoice_summary != "-":
+        message_lines.append(f"Invoices: {payment_invoice_summary}")
     message_lines.append(f"Verify: {verification_code}")
     message_lines.append(verification_url)
 
@@ -315,10 +362,13 @@ def send_receipt_email(
         f"Amount: {format_money(receipt.amount, receipt.currency)}",
         f"Issued: {_receipt_issued_at_text(receipt)}",
     ]
+    payment_invoice_summary = (
+        payment_invoice_summary_text(session, int(payment.id)) if payment is not None else "-"
+    )
     if payment is not None and payment.payment_no:
         body_lines.append(f"Payment: {payment.payment_no}")
-    if invoice is not None and invoice.invoice_no:
-        body_lines.append(f"Invoice: {invoice.invoice_no}")
+    if payment_invoice_summary and payment_invoice_summary != "-":
+        body_lines.append(f"Invoices: {payment_invoice_summary}")
     body_lines.append(f"Verify code: {verification_code}")
     body_lines.append(verification_url)
     result = provider.send_message(
@@ -367,10 +417,13 @@ def send_receipt_whatsapp(
         f"Verify code: {verification_code}",
         verification_url,
     ]
+    payment_invoice_summary = (
+        payment_invoice_summary_text(session, int(payment.id)) if payment is not None else "-"
+    )
     if payment is not None and payment.payment_no:
         message_lines.insert(2, f"Payment: {payment.payment_no}")
-    if invoice is not None and invoice.invoice_no:
-        message_lines.insert(3, f"Invoice: {invoice.invoice_no}")
+    if payment_invoice_summary and payment_invoice_summary != "-":
+        message_lines.insert(3, f"Invoices: {payment_invoice_summary}")
     result = provider.send_message(recipient, "\n".join(message_lines))
     if not result.ok:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=result.error or "WhatsApp delivery failed.")
@@ -397,8 +450,8 @@ def download_receipt_pdf(
     session: Session = Depends(get_db_session),
 ) -> Response:
     receipt, tenant, payment, invoice = _get_receipt_bundle(session, receipt_id)
-    if payment is None or invoice is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Receipt is missing payment or invoice context.")
+    if payment is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Receipt is missing payment context.")
 
     actor_name = None
     if payment.handled_by_user_id is not None:
@@ -407,8 +460,7 @@ def download_receipt_pdf(
             actor_name = actor.full_name
 
     profile = session.execute(select(HostelProfile)).scalars().first()
-    total_paid = Decimal(str(get_paid_total(session, int(invoice.id))))
-    current_amount = Decimal(str(payment.amount or 0))
+    allocation_rows = _receipt_allocation_rows(session, int(payment.id))
     verification_code, verification_url = _receipt_security_fields(receipt)
     pdf_bytes = build_receipt_pdf(
         receipt,
@@ -416,9 +468,28 @@ def download_receipt_pdf(
         invoice,
         tenant,
         actor_name,
+        allocations=[
+            {
+                "invoice": allocation_invoice.invoice_no,
+                "allocated": format_money(allocation.allocated_amount, payment.currency),
+                "balance_after": format_money(
+                    Decimal(str(allocation_invoice.total or 0)) - get_paid_total(session, int(allocation_invoice.id)),
+                    allocation_invoice.currency,
+                ),
+            }
+            for allocation, allocation_invoice in allocation_rows
+        ],
         profile=profile,
-        paid_before=str((total_paid - current_amount).quantize(Decimal("0.01"))),
-        balance_after=str((Decimal(str(invoice.total or 0)) - total_paid).quantize(Decimal("0.01"))),
+        paid_before=(
+            str((Decimal(str(get_paid_total(session, int(invoice.id)))) - Decimal(str(allocation_rows[0][0].allocated_amount or 0))).quantize(Decimal("0.01")))
+            if invoice is not None and len(allocation_rows) == 1
+            else None
+        ),
+        balance_after=(
+            str((Decimal(str(invoice.total or 0)) - Decimal(str(get_paid_total(session, int(invoice.id))))).quantize(Decimal("0.01")))
+            if invoice is not None and len(allocation_rows) == 1
+            else None
+        ),
         verification_code=verification_code,
         verification_url=verification_url,
     )

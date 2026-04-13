@@ -54,6 +54,8 @@ export function InvoiceDetailActions({ detail }: Props) {
   }, [detail.available_beds, detail.reserved_bed_id, detail.reserved_bed_label]);
 
   const voidablePayments = detail.payments.filter((payment) => payment.status === "completed");
+  const selectedVoidPayment = voidablePayments.find((payment) => String(payment.id) === voidPaymentId) ?? null;
+  const selectedReservedBed = editableBeds.find((bed) => String(bed.bed_id) === reservedBedId) ?? null;
 
   async function runAction(path: string, payload: object, confirmation: string) {
     if (!(await confirmAction(confirmation))) {
@@ -132,7 +134,7 @@ export function InvoiceDetailActions({ detail }: Props) {
                     },
                     buildConfirmationMessage("Save these invoice changes?", [
                       `Invoice: ${detail.invoice.invoice_no}`,
-                      `Bed ID: ${reservedBedId}`,
+                      selectedReservedBed ? `Reserved bed: ${selectedReservedBed.label}` : null,
                       `Due date: ${dueAt || "Not set"}`,
                       notes.trim() ? `Note: ${notes.trim()}` : null,
                     ]),
@@ -203,7 +205,7 @@ export function InvoiceDetailActions({ detail }: Props) {
                     { reason: voidReason },
                     buildConfirmationMessage("Void this payment?", [
                       `Invoice: ${detail.invoice.invoice_no}`,
-                      `Payment ID: ${voidPaymentId}`,
+                      selectedVoidPayment ? `Payment: ${selectedVoidPayment.payment_no} | ${selectedVoidPayment.amount}` : null,
                       voidReason.trim() ? `Reason: ${voidReason.trim()}` : "No void note entered.",
                     ]),
                   )

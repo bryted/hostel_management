@@ -36,7 +36,7 @@ export default async function ReceiptDetailPage({ params }: PageProps) {
       />
 
       <div className="grid two">
-        <DataPanel title="Receipt detail">
+        <DataPanel title="Receipt detail" tone="primary">
           <div className="meta-list">
             <div className="meta-row">
               <span>Amount</span>
@@ -51,16 +51,28 @@ export default async function ReceiptDetailPage({ params }: PageProps) {
               <strong>{detail.payment?.payment_no ?? "-"}</strong>
             </div>
             <div className="meta-row">
-              <span>Invoice</span>
-              <strong>{detail.invoice?.invoice_no ?? "-"}</strong>
+              <span>Invoices</span>
+              <strong>{detail.receipt.invoice_summary ?? detail.invoice?.invoice_no ?? "-"}</strong>
             </div>
             <div className="meta-row">
               <span>Printed count</span>
               <strong>{detail.receipt.printed_count}</strong>
             </div>
+            {detail.payment ? (
+              <>
+                <div className="meta-row">
+                  <span>Allocated</span>
+                  <strong>{detail.payment.allocated_total ?? "-"}</strong>
+                </div>
+                <div className="meta-row">
+                  <span>Unallocated</span>
+                  <strong>{detail.payment.unallocated_amount ?? "-"}</strong>
+                </div>
+              </>
+            ) : null}
           </div>
         </DataPanel>
-        <DataPanel title="Security">
+        <DataPanel title="Security" tone="supporting">
           <div className="receipt-security">
             <div className="meta-list">
               <div className="meta-row">
@@ -93,6 +105,37 @@ export default async function ReceiptDetailPage({ params }: PageProps) {
           />
         </DataPanel>
       </div>
+
+      <DataPanel title="Allocation breakdown" tone="secondary">
+        {detail.allocations.length ? (
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Invoice</th>
+                  <th>Academic year</th>
+                  <th>Allocated</th>
+                  <th>Invoice total</th>
+                  <th>Balance after</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detail.allocations.map((row, index) => (
+                  <tr key={`${index}-${row.Invoice}`}>
+                    <td>{row.Invoice ?? "-"}</td>
+                    <td>{row["Academic year"] ?? "-"}</td>
+                    <td>{row.Allocated ?? "-"}</td>
+                    <td>{row["Invoice total"] ?? "-"}</td>
+                    <td>{row["Invoice balance after"] ?? "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="empty-state">No invoice allocations were attached to this receipt.</p>
+        )}
+      </DataPanel>
     </div>
   );
 }

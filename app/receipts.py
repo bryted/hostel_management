@@ -14,9 +14,10 @@ from app.models import HostelProfile, Invoice, Payment, Receipt, Tenant
 def build_receipt_pdf(
     receipt: Receipt,
     payment: Payment,
-    invoice: Invoice,
+    invoice: Invoice | None,
     tenant: Tenant,
     received_by: str | None,
+    allocations: list[dict[str, str]] | None = None,
     profile: HostelProfile | None = None,
     paid_before: str | None = None,
     balance_after: str | None = None,
@@ -162,7 +163,13 @@ def build_receipt_pdf(
     pdf.line(margin, line_y, width - margin, line_y)
 
     info_y = line_y - 20
-    draw_label_value(margin, info_y, "Invoice No", invoice.invoice_no, bold=True)
+    draw_label_value(
+        margin,
+        info_y,
+        "Invoice No",
+        invoice.invoice_no if invoice is not None else ("Multiple" if allocations else "-"),
+        bold=True,
+    )
     draw_label_value(margin + 200, info_y, "Payment No", payment.payment_no)
 
     summary_width = 220
@@ -192,7 +199,7 @@ def build_receipt_pdf(
     pdf.drawRightString(
         summary_x + summary_width - 12,
         summary_top - 36,
-        f"{invoice.currency} {invoice.total}",
+        f"{invoice.currency if invoice is not None else receipt.currency} {invoice.total if invoice is not None else '-'}",
     )
     pdf.setFont("Helvetica-Bold", 10)
     pdf.drawRightString(
@@ -222,7 +229,23 @@ def build_receipt_pdf(
         )
 
     notes_y = summary_top - summary_height - 18
-    if invoice.notes:
+    if allocations:
+        pdf.setFillColor(MUTED)
+        pdf.setFont("Helvetica-Bold", 9)
+        pdf.drawString(margin, notes_y, "Allocations")
+        pdf.setFillColor(TEXT)
+        pdf.setFont("Helvetica", 9)
+        for idx, row in enumerate(allocations[:6]):
+            pdf.drawString(
+                margin,
+                notes_y - 14 - (idx * 12),
+                clamp(
+                    f"{row.get('invoice', '-')} | {row.get('allocated', '-')} | balance {row.get('balance_after', '-')}",
+                    110,
+                ),
+            )
+        notes_y -= 18 + (min(len(allocations), 6) * 12)
+    if invoice is not None and invoice.notes:
         pdf.setFillColor(MUTED)
         pdf.setFont("Helvetica-Bold", 9)
         pdf.drawString(margin, notes_y, "Notes")

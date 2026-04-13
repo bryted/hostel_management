@@ -17,6 +17,14 @@ function moneyValue(value: string): number {
   return Number.isFinite(normalized) ? normalized : 0;
 }
 
+const PAYMENT_METHOD_OPTIONS = [
+  { value: "cash", label: "Cash" },
+  { value: "card", label: "Card" },
+  { value: "bank_transfer", label: "Bank transfer" },
+  { value: "mobile_money", label: "Mobile money" },
+  { value: "check", label: "Check" },
+];
+
 type Props = {
   user: User;
   tenants: TenantListItem[];
@@ -51,8 +59,11 @@ export function BillingActions({
   const [notes, setNotes] = useState("");
   const [submitNow, setSubmitNow] = useState(true);
 
-  const [paymentInvoiceId, setPaymentInvoiceId] = useState(
-    payableInvoices[0] ? String(payableInvoices[0].id) : "",
+  const [paymentTenantId, setPaymentTenantId] = useState(
+    payableInvoices[0] ? String(payableInvoices[0].tenant_id) : (tenants[0] ? String(tenants[0].id) : ""),
+  );
+  const [allocations, setAllocations] = useState<Array<{ invoiceId: string; amount: string }>>(
+    payableInvoices[0] ? [{ invoiceId: String(payableInvoices[0].id), amount: "" }] : [],
   );
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("cash");
@@ -66,36 +77,99 @@ export function BillingActions({
 
   const selectedTenant = tenants.find((tenant) => String(tenant.id) === tenantId) ?? null;
   const selectedBed = availableBeds.find((bed) => String(bed.bed_id) === bedId) ?? null;
-  const selectedPaymentInvoice =
-    payableInvoices.find((invoice) => String(invoice.id) === paymentInvoiceId) ?? null;
+  const payableInvoiceCountByTenant = new Map<string, number>();
+  for (const invoice of payableInvoices) {
+    const key = String(invoice.tenant_id);
+    payableInvoiceCountByTenant.set(key, (payableInvoiceCountByTenant.get(key) ?? 0) + 1);
+  }
+  const paymentTenantOptions = tenants.filter((tenant) =>
+    payableInvoices.some((invoice) => String(invoice.tenant_id) === String(tenant.id)),
+  );
+  const selectedPaymentTenant = tenants.find((tenant) => String(tenant.id) === paymentTenantId) ?? null;
+  const tenantPayableInvoices = payableInvoices.filter(
+    (invoice) => String(invoice.tenant_id) === paymentTenantId,
+  );
+  const selectedAllocationInvoiceIds = new Set(
+    allocations.map((allocation) => allocation.invoiceId).filter(Boolean),
+  );
   const selectedApprovalInvoice =
     submittedInvoices.find((invoice) => String(invoice.id) === approvalInvoiceId) ?? null;
-  const selectedPaymentBalance = selectedPaymentInvoice ? moneyValue(selectedPaymentInvoice.balance) : 0;
   const paymentAmount = Number(amount);
-  const paymentAmountInvalid =
-    !amount.trim()
-    || !Number.isFinite(paymentAmount)
-    || paymentAmount <= 0
-    || paymentAmount > selectedPaymentBalance;
+  const allocationTotal = allocations.reduce(
+    (sum, allocation) => sum + (Number(allocation.amount || "0") || 0),
+    0,
+  );
+  const remainingToAllocate = Number.isFinite(paymentAmount) ? paymentAmount - allocationTotal : 0;
+  const paymentAmountInvalid = !amount.trim() || !Number.isFinite(paymentAmount) || paymentAmount <= 0;
   const referenceMissing = method !== "cash" && !reference.trim();
+  const allocationInvalid =
+    allocations.some((allocation) => {
+      const invoice = tenantPayableInvoices.find((item) => String(item.id) === allocation.invoiceId);
+      const allocationAmount = Number(allocation.amount || "0");
+      return (
+        !allocation.invoiceId
+        || !invoice
+        || !Number.isFinite(allocationAmount)
+        || allocationAmount <= 0
+        || allocationAmount > moneyValue(invoice.balance)
+      );
+    })
+    || allocationTotal > paymentAmount
+    || allocations.length === 0;
 
   useEffect(() => {
-    if (
-      !selectedPaymentInvoice
-      || selectedPaymentInvoice.hold_expired
-      || selectedPaymentInvoice.hold_hours_left === null
-      || selectedPaymentInvoice.hold_hours_left > 6
-      || peekFlashMessage() !== null
-      || warnedHoldInvoicesRef.current.has(selectedPaymentInvoice.id)
-    ) {
+    if (!paymentTenantOptions.length) {
+      if (paymentTenantId) {
+        setPaymentTenantId("");
+      }
+      if (allocations.length) {
+        setAllocations([]);
+      }
       return;
     }
-    warnedHoldInvoicesRef.current.add(selectedPaymentInvoice.id);
-    storePassiveFlashMessage({
-      tone: "warning",
-      message: `Bed hold expires in ${selectedPaymentInvoice.hold_hours_left}h for ${selectedPaymentInvoice.invoice_no}. Collect or reassign promptly.`,
+    if (!paymentTenantOptions.some((tenant) => String(tenant.id) === paymentTenantId)) {
+      const nextTenantId = String(paymentTenantOptions[0].id);
+      setPaymentTenantId(nextTenantId);
+      const nextInvoices = payableInvoices.filter((invoice) => String(invoice.tenant_id) === nextTenantId);
+      setAllocations(nextInvoices[0] ? [{ invoiceId: String(nextInvoices[0].id), amount: "" }] : []);
+    }
+  }, [allocations.length, payableInvoices, paymentTenantId, paymentTenantOptions]);
+
+  useEffect(() => {
+    for (const invoice of tenantPayableInvoices) {
+      if (
+        invoice.hold_expired
+        || invoice.hold_hours_left === null
+        || invoice.hold_hours_left > 6
+        || peekFlashMessage() !== null
+        || warnedHoldInvoicesRef.current.has(invoice.id)
+      ) {
+        continue;
+      }
+      warnedHoldInvoicesRef.current.add(invoice.id);
+      storePassiveFlashMessage({
+        tone: "warning",
+        message: `Bed hold expires in ${invoice.hold_hours_left}h for ${invoice.invoice_no}. Collect or reassign promptly.`,
+      });
+    }
+  }, [tenantPayableInvoices]);
+
+  function invoiceOptionsForAllocation(index: number): BillingInvoiceItem[] {
+    return tenantPayableInvoices.filter((invoice) => {
+      const invoiceId = String(invoice.id);
+      return (
+        invoiceId === allocations[index]?.invoiceId ||
+        !allocations.some((allocation, allocationIndex) => allocationIndex !== index && allocation.invoiceId === invoiceId)
+      );
     });
-  }, [selectedPaymentInvoice]);
+  }
+
+  function nextUnselectedInvoiceId(): string {
+    const candidate = tenantPayableInvoices.find(
+      (invoice) => !selectedAllocationInvoiceIds.has(String(invoice.id)),
+    );
+    return candidate ? String(candidate.id) : "";
+  }
 
   async function runAction(path: string, payload: object, confirmation: string, redirectTo?: string) {
     if (!(await confirmAction(confirmation))) {
@@ -128,7 +202,7 @@ export function BillingActions({
   }
 
   return (
-    <section className="panel">
+    <section className="panel workspace-panel secondary">
       <h3>Billing actions</h3>
       <div className="stack">
         <details className="action-disclosure">
@@ -140,7 +214,7 @@ export function BillingActions({
               <select value={tenantId} onChange={(event) => setTenantId(event.target.value)}>
                 {tenants.map((tenant) => (
                   <option key={tenant.id} value={tenant.id}>
-                    {tenant.name}
+                    {tenant.name} | {tenant.status}
                   </option>
                 ))}
               </select>
@@ -222,28 +296,41 @@ export function BillingActions({
           <h4>Receive payment</h4>
           <div className="stack tight">
             <label className="field">
-              <span>Invoice</span>
-              <select value={paymentInvoiceId} onChange={(event) => setPaymentInvoiceId(event.target.value)}>
-                {payableInvoices.map((invoice) => (
-                  <option key={invoice.id} value={invoice.id}>
-                    {invoice.invoice_no} | {invoice.tenant_name} | {invoice.balance}
+              <span>Tenant</span>
+              <select
+                value={paymentTenantId}
+                disabled={pending || !paymentTenantOptions.length}
+                onChange={(event) => {
+                  const nextTenantId = event.target.value;
+                  setPaymentTenantId(nextTenantId);
+                  const nextInvoices = payableInvoices.filter(
+                    (invoice) => String(invoice.tenant_id) === nextTenantId,
+                  );
+                  setAllocations(
+                    nextInvoices[0] ? [{ invoiceId: String(nextInvoices[0].id), amount: "" }] : [],
+                  );
+                }}
+              >
+                {paymentTenantOptions.map((tenant) => (
+                  <option key={tenant.id} value={tenant.id}>
+                    {tenant.name} | {payableInvoiceCountByTenant.get(String(tenant.id)) ?? 0} open invoice(s)
                   </option>
                 ))}
               </select>
             </label>
             <div className="inline-actions">
               <label className="field">
-                <span>Amount</span>
+                <span>Total payment</span>
                 <input value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" placeholder="0.00" />
               </label>
               <label className="field">
                 <span>Method</span>
                 <select value={method} onChange={(event) => setMethod(event.target.value)}>
-                  <option value="cash">cash</option>
-                  <option value="card">card</option>
-                  <option value="bank_transfer">bank_transfer</option>
-                  <option value="mobile_money">mobile_money</option>
-                  <option value="check">check</option>
+                  {PAYMENT_METHOD_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
                 </select>
               </label>
             </div>
@@ -255,69 +342,162 @@ export function BillingActions({
                 placeholder={method === "cash" ? "Optional for cash" : "Required for non-cash"}
               />
             </label>
+            <div className="stack tight">
+              <div className="meta-row">
+                <span>Allocations</span>
+                <div className="inline-actions">
+                  <button
+                    className="button ghost small"
+                    disabled={pending || !tenantPayableInvoices.length || !nextUnselectedInvoiceId()}
+                    onClick={() =>
+                      setAllocations((current) => [
+                        ...current,
+                        { invoiceId: nextUnselectedInvoiceId(), amount: "" },
+                      ])
+                    }
+                    type="button"
+                  >
+                    Add invoice
+                  </button>
+                  <button
+                    className="button ghost small"
+                    disabled={pending || !Number.isFinite(remainingToAllocate) || allocations.length === 0}
+                    onClick={() =>
+                      setAllocations((current) =>
+                        current.map((allocation, index) =>
+                          index === current.length - 1
+                            ? {
+                                ...allocation,
+                                amount: remainingToAllocate > 0 ? remainingToAllocate.toFixed(2) : allocation.amount,
+                              }
+                            : allocation,
+                        ),
+                      )
+                    }
+                    type="button"
+                  >
+                    Use remaining
+                  </button>
+                </div>
+              </div>
+              {allocations.length ? (
+                allocations.map((allocation, index) => {
+                  const invoiceOptions = invoiceOptionsForAllocation(index);
+                  const selectedInvoice = tenantPayableInvoices.find((invoice) => String(invoice.id) === allocation.invoiceId);
+                  return (
+                    <div key={`${allocation.invoiceId}-${index}`} className="inline-actions">
+                      <label className="field grow">
+                        <span>Invoice {index + 1}</span>
+                        <select
+                          value={allocation.invoiceId}
+                          disabled={!invoiceOptions.length}
+                          onChange={(event) =>
+                            setAllocations((current) =>
+                              current.map((item, itemIndex) =>
+                                itemIndex === index ? { ...item, invoiceId: event.target.value } : item,
+                              ),
+                            )
+                          }
+                        >
+                          {invoiceOptions.map((invoice) => (
+                            <option key={invoice.id} value={invoice.id}>
+                              {invoice.invoice_no} | {invoice.balance} | {invoice.academic_year ?? "-"}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Allocated amount</span>
+                        <input
+                          value={allocation.amount}
+                          onChange={(event) =>
+                            setAllocations((current) =>
+                              current.map((item, itemIndex) =>
+                                itemIndex === index ? { ...item, amount: event.target.value } : item,
+                              ),
+                            )
+                          }
+                          inputMode="decimal"
+                          placeholder="0.00"
+                        />
+                      </label>
+                      <button
+                        className="button ghost small"
+                        disabled={pending || allocations.length <= 1}
+                        onClick={() =>
+                          setAllocations((current) => current.filter((_, itemIndex) => itemIndex !== index))
+                        }
+                        type="button"
+                      >
+                        Remove
+                      </button>
+                      <span className="small">
+                        {selectedInvoice
+                          ? `${selectedInvoice.balance} remaining | ${selectedInvoice.hold_expired ? "hold expired" : selectedInvoice.hold_hours_left !== null ? `${selectedInvoice.hold_hours_left}h left` : "hold active"}`
+                          : "Select an invoice"}
+                      </span>
+                    </div>
+                  );
+                })
+              ) : (
+                <p className="section-note">
+                  {paymentTenantOptions.length
+                    ? "No payable invoices remain for the selected tenant."
+                    : "No tenants currently have invoices ready for payment collection."}
+                </p>
+              )}
+            </div>
             <p className="section-note">
               {blockDuplicatePaymentReference
                 ? "Duplicate payment references are blocked in this environment."
                 : "Duplicate payment references will warn but not block."}
             </p>
-            {selectedPaymentInvoice ? (
-              <p className="section-note">
-                Selected invoice: {selectedPaymentInvoice.invoice_no} for {selectedPaymentInvoice.tenant_name} with balance {selectedPaymentInvoice.balance} and paid so far {selectedPaymentInvoice.paid_total}.
-                {selectedPaymentInvoice.hold_expired
-                  ? " Hold expired."
-                  : selectedPaymentInvoice.hold_hours_left !== null && selectedPaymentInvoice.hold_expires_at
-                    ? ` Hold has ${selectedPaymentInvoice.hold_hours_left}h left and expires ${selectedPaymentInvoice.hold_expires_at}.`
-                    : ""}
-              </p>
-            ) : null}
-            {selectedPaymentInvoice ? (
-              <div className="inline-actions">
-                <button
-                  className="button ghost small"
-                  disabled={pending}
-                  onClick={() => setAmount(selectedPaymentBalance.toFixed(2))}
-                  type="button"
-                >
-                  Use remaining balance
-                </button>
-                <span className="small">Remaining balance: {selectedPaymentInvoice.balance}</span>
+            <div className="meta-list">
+              <div className="meta-row">
+                <span>Tenant</span>
+                <strong>{selectedPaymentTenant?.name ?? "-"}</strong>
               </div>
-            ) : null}
-            {paymentAmount > selectedPaymentBalance && selectedPaymentInvoice ? (
-              <p className="error-text">
-                Amount exceeds the remaining balance of {selectedPaymentInvoice.balance}. Overpayment is blocked.
-              </p>
+              <div className="meta-row">
+                <span>Total payment</span>
+                <strong>{amount || "0.00"}</strong>
+              </div>
+              <div className="meta-row">
+                <span>Allocated</span>
+                <strong>{allocationTotal.toFixed(2)}</strong>
+              </div>
+              <div className="meta-row">
+                <span>Unallocated</span>
+                <strong>{Number.isFinite(remainingToAllocate) ? remainingToAllocate.toFixed(2) : "-"}</strong>
+              </div>
+            </div>
+            {allocationInvalid && tenantPayableInvoices.length ? (
+              <p className="error-text">Each split must use a valid invoice and amount, and total allocations cannot exceed the payment amount.</p>
             ) : null}
             {referenceMissing ? (
               <p className="error-text">Reference is required for non-cash payments.</p>
             ) : null}
-            {selectedPaymentInvoice?.hold_expired ? (
-              <p className="section-note">
-                The original bed hold expired. Select a new bed before recording payment or allocation.
-              </p>
-            ) : null}
             <button
               className="button success"
-              disabled={
-                pending
-                || !paymentInvoiceId
-                || paymentAmountInvalid
-                || referenceMissing
-                || Boolean(selectedPaymentInvoice?.hold_expired)
-              }
+              disabled={pending || !paymentTenantId || paymentAmountInvalid || referenceMissing || allocationInvalid}
               onClick={() =>
                 runAction(
-                  `/invoices/${paymentInvoiceId}/payments`,
+                  "/billing/payments",
                   {
+                    tenant_id: Number(paymentTenantId),
                     amount: Number(amount),
                     method,
                     reference,
+                    allocations: allocations.map((allocation) => ({
+                      invoice_id: Number(allocation.invoiceId),
+                      amount: Number(allocation.amount),
+                    })),
                   },
                   buildConfirmationMessage("Record this payment?", [
-                    selectedPaymentInvoice ? `Invoice: ${selectedPaymentInvoice.invoice_no}` : null,
-                    selectedPaymentInvoice ? `Tenant: ${selectedPaymentInvoice.tenant_name}` : null,
+                    selectedPaymentTenant ? `Tenant: ${selectedPaymentTenant.name}` : null,
                     `Amount: ${amount}`,
                     `Method: ${method}`,
+                    `Allocated: ${allocationTotal.toFixed(2)}`,
+                    `Unallocated: ${Number.isFinite(remainingToAllocate) ? remainingToAllocate.toFixed(2) : "-"}`,
                     reference.trim() ? `Reference: ${reference.trim()}` : null,
                   ]),
                 )

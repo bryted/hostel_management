@@ -39,12 +39,12 @@ export function InteractiveTable({ rows, emptyText, searchPlaceholder = "Filter 
   }, [filter, rows, sortColumn, sortDirection]);
 
   if (!rows.length) {
-    return <p className="small">{emptyText}</p>;
+    return <p className="empty-state">{emptyText}</p>;
   }
 
   return (
     <div className="stack tight">
-      <div className="toolbar">
+      <div className="toolbar table-toolbar">
         <input
           autoComplete="off"
           name="table_filter"
@@ -52,56 +52,58 @@ export function InteractiveTable({ rows, emptyText, searchPlaceholder = "Filter 
           onChange={(event) => setFilter(event.target.value)}
           placeholder={searchPlaceholder}
         />
-        <span className="small">{filteredRows.length} row(s)</span>
+        <span className="small table-toolbar-count">{filteredRows.length} row(s)</span>
       </div>
-      <table className="table">
-        <thead>
-          <tr>
-            {columns.map((column) => (
-              <th key={column}>
-                <button
-                  className="table-sort"
-                  onClick={() => {
-                    if (sortColumn === column) {
-                      setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
-                    } else {
-                      setSortColumn(column);
-                      setSortDirection("asc");
-                    }
-                  }}
-                  type="button"
-                >
-                  <span>{column}</span>
-                  <span>
-                    {sortColumn === column
-                      ? sortDirection === "asc"
-                        ? "\u2191"
-                        : "\u2193"
-                      : "\u2195"}
-                  </span>
-                </button>
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {filteredRows.length ? (
-            filteredRows.map((row, index) => (
-              <tr key={`${index}-${columns.join("-")}`}>
-                {columns.map((column) => (
-                  <td key={column}>{row[column] ?? "-"}</td>
-                ))}
-              </tr>
-            ))
-          ) : (
+      <div className="table-scroll">
+        <table className="table">
+          <thead>
             <tr>
-              <td className="small" colSpan={columns.length}>
-                No rows match the current filter.
-              </td>
+              {columns.map((column) => (
+                <th key={column}>
+                  <button
+                    className="table-sort"
+                    onClick={() => {
+                      if (sortColumn === column) {
+                        setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+                      } else {
+                        setSortColumn(column);
+                        setSortDirection("asc");
+                      }
+                    }}
+                    type="button"
+                  >
+                    <span>{column}</span>
+                    <span>
+                      {sortColumn === column
+                        ? sortDirection === "asc"
+                          ? "\u2191"
+                          : "\u2193"
+                        : "\u2195"}
+                    </span>
+                  </button>
+                </th>
+              ))}
             </tr>
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {filteredRows.length ? (
+              filteredRows.map((row, index) => (
+                <tr key={`${index}-${columns.join("-")}`}>
+                  {columns.map((column) => (
+                    <td key={column}>{row[column] ?? "-"}</td>
+                  ))}
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td className="small" colSpan={columns.length}>
+                  No rows match the current filter.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

@@ -153,33 +153,43 @@ export default async function InventoryPage({ searchParams }: PageProps) {
 
       {section === "overview" ? (
         <div className="grid two">
-          <DataPanel title="Blocks" description="High-level capacity by block. Open Structure for floor and room detail.">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Block</th>
-                  <th>Floors</th>
-                  <th>Rooms</th>
-                  <th>Available</th>
-                  <th>Occupied</th>
-                  <th>Out of service</th>
-                </tr>
-              </thead>
-              <tbody>
-                {blockSummaries.map((block) => (
-                  <tr key={block.id}>
-                    <td>{block.name}</td>
-                    <td>{block.floors}</td>
-                    <td>{block.rooms}</td>
-                    <td>{block.available}</td>
-                    <td>{block.occupied}</td>
-                    <td>{block.outOfService}</td>
+          <DataPanel title="Blocks" description="High-level capacity by block. Open Structure for floor and room detail." tone="secondary">
+            <div className="table-scroll">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Block</th>
+                    <th>Floors</th>
+                    <th>Rooms</th>
+                    <th>Available</th>
+                    <th>Occupied</th>
+                    <th>Out of service</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {blockSummaries.length ? (
+                    blockSummaries.map((block) => (
+                      <tr key={block.id}>
+                        <td>{block.name}</td>
+                        <td>{block.floors}</td>
+                        <td>{block.rooms}</td>
+                        <td>{block.available}</td>
+                        <td>{block.occupied}</td>
+                        <td>{block.outOfService}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td className="small" colSpan={6}>
+                        No blocks are configured yet.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </DataPanel>
-          <DataPanel title="Capacity snapshot">
+          <DataPanel title="Capacity snapshot" tone="supporting">
             <div className="detail-grid">
               <div className="detail-card">
                 <h4>Active rooms</h4>
@@ -216,49 +226,52 @@ export default async function InventoryPage({ searchParams }: PageProps) {
       </div>
 
       {section === "integrity" ? (
-        <DataPanel title="Integrity" description="Use this view to reconcile configured room structure against live beds.">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Room</th>
-                <th>Configured</th>
-                <th>Actual</th>
-                <th>Status</th>
-                <th>Issues</th>
-              </tr>
-            </thead>
-            <tbody>
-              {inventory.integrity_rows.length ? (
-                inventory.integrity_rows.map((row, index) => (
-                  <tr key={`${row.Room}-${index}`}>
-                    <td>
-                      {row.Block} / {row.Floor || "Unassigned"} / {row.Room}
-                    </td>
-                    <td>{row["Configured beds"]}</td>
-                    <td>{row["Actual beds"]}</td>
-                    <td>
-                      <StatusPill tone={row.Status === "CHECK" ? "warning" : "success"}>
-                        {String(row.Status ?? "OK")}
-                      </StatusPill>
-                    </td>
-                    <td>{row.Issues || "-"}</td>
-                  </tr>
-                ))
-              ) : (
+        <DataPanel title="Integrity" description="Use this view to reconcile configured room structure against live beds." tone="primary">
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
                 <tr>
-                  <td colSpan={5} className="small">
-                    No integrity rows are available.
-                  </td>
+                  <th>Room</th>
+                  <th>Configured</th>
+                  <th>Actual</th>
+                  <th>Status</th>
+                  <th>Issues</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {inventory.integrity_rows.length ? (
+                  inventory.integrity_rows.map((row, index) => (
+                    <tr key={`${row.Room}-${index}`}>
+                      <td>
+                        {row.Block} / {row.Floor || "Unassigned"} / {row.Room}
+                      </td>
+                      <td>{row["Configured beds"]}</td>
+                      <td>{row["Actual beds"]}</td>
+                      <td>
+                        <StatusPill tone={row.Status === "CHECK" ? "warning" : "success"}>
+                          {String(row.Status ?? "OK")}
+                        </StatusPill>
+                      </td>
+                      <td>{row.Issues || "-"}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={5} className="small">
+                      No integrity rows are available.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </DataPanel>
       ) : null}
 
       {section === "structure" ? (
         <>
-          <DataPanel title="Floors">
+          <DataPanel title="Floors" tone="secondary">
+            <div className="table-scroll">
             <table className="table">
               <thead>
                 <tr>
@@ -291,8 +304,10 @@ export default async function InventoryPage({ searchParams }: PageProps) {
                 )}
               </tbody>
             </table>
+            </div>
           </DataPanel>
-          <DataPanel title="Rooms">
+          <DataPanel title="Rooms" tone="primary">
+            <div className="table-scroll">
             <table className="table">
               <thead>
                 <tr>
@@ -335,6 +350,7 @@ export default async function InventoryPage({ searchParams }: PageProps) {
                 )}
               </tbody>
             </table>
+            </div>
           </DataPanel>
         </>
       ) : null}

@@ -6,6 +6,15 @@ export type User = {
   tenant_id: number | null;
 };
 
+export type AcademicYearSummary = {
+  id: number;
+  label: string;
+  start_date: string;
+  end_date: string;
+  is_current: boolean;
+  is_closed: boolean;
+};
+
 export type DashboardSummary = {
   start_date: string;
   end_date: string;
@@ -24,6 +33,7 @@ export type DashboardSummary = {
   prospects: number;
   approved_unpaid: number;
   paid_unallocated: number;
+  current_academic_year: string | null;
 };
 
 export type BillingInvoiceItem = {
@@ -40,6 +50,7 @@ export type BillingInvoiceItem = {
   hold_expired: boolean;
   hold_expires_at: string | null;
   hold_hours_left: number | null;
+  academic_year: string | null;
 };
 
 export type BillingPaymentItem = {
@@ -55,6 +66,10 @@ export type BillingPaymentItem = {
   status: string;
   paid_at: string | null;
   can_void: boolean;
+  academic_year: string | null;
+  invoice_summary: string | null;
+  allocated_total: string | null;
+  unallocated_amount: string | null;
 };
 
 export type BillingReceiptItem = {
@@ -69,6 +84,8 @@ export type BillingReceiptItem = {
   amount: string;
   issued_at: string | null;
   printed_count: number;
+  academic_year: string | null;
+  invoice_summary: string | null;
 };
 
 export type BillingOverview = {
@@ -99,6 +116,16 @@ export type TenantListItem = {
   room: string | null;
 };
 
+export type TenantListResponse = {
+  rows: TenantListItem[];
+  total: number;
+  page: number;
+  page_size: number;
+  active_total: number;
+  prospect_total: number;
+  inactive_total: number;
+};
+
 export type InvoiceSummary = {
   id: number;
   invoice_no: string;
@@ -109,6 +136,7 @@ export type InvoiceSummary = {
   issued_at: string | null;
   due_at: string | null;
   can_allocate: boolean;
+  academic_year: string | null;
 };
 
 export type PaymentSummary = {
@@ -119,6 +147,10 @@ export type PaymentSummary = {
   reference: string | null;
   status: string;
   paid_at: string | null;
+  academic_year: string | null;
+  invoice_summary: string | null;
+  allocated_total: string | null;
+  unallocated_amount: string | null;
 };
 
 export type ReceiptSummary = {
@@ -127,6 +159,8 @@ export type ReceiptSummary = {
   amount: string;
   issued_at: string | null;
   printed_count: number;
+  academic_year: string | null;
+  invoice_summary: string | null;
 };
 
 export type BedOption = {
@@ -150,6 +184,7 @@ export type ReservationSummary = {
   bed: string;
   expires_at: string | null;
   extension_count: number;
+  academic_year: string | null;
 };
 
 export type AllocationSummary = {
@@ -162,6 +197,7 @@ export type AllocationSummary = {
   room: string;
   bed: string;
   start_date: string | null;
+  academic_year: string | null;
 };
 
 export type TimelineRow = {
@@ -174,11 +210,23 @@ export type TimelineRow = {
 export type TenantWorkspace = {
   tenant: TenantListItem;
   invoices: InvoiceSummary[];
+  invoice_total: number;
+  invoice_page: number;
+  invoice_page_size: number;
   payments: PaymentSummary[];
+  payment_total: number;
+  payment_page: number;
+  payment_page_size: number;
   receipts: ReceiptSummary[];
+  receipt_total: number;
+  receipt_page: number;
+  receipt_page_size: number;
   active_reservation: ReservationSummary | null;
   active_allocation: AllocationSummary | null;
   timeline: TimelineRow[];
+  timeline_total: number;
+  timeline_page: number;
+  timeline_page_size: number;
   available_beds: BedOption[];
   allocatable_invoices: InvoiceSummary[];
   next_action: string;
@@ -200,6 +248,17 @@ export type BedListItem = {
   price_per_bed: string;
   reservation_expires: string | null;
   allocation_start: string | null;
+};
+
+export type BedListResponse = {
+  rows: BedListItem[];
+  total: number;
+  page: number;
+  page_size: number;
+  available_total: number;
+  reserved_total: number;
+  occupied_total: number;
+  out_of_service_total: number;
 };
 
 export type OnboardingQueueItem = {
@@ -249,6 +308,7 @@ export type ReceiptDetail = {
   tenant: TenantListItem;
   payment: PaymentSummary | null;
   invoice: BillingInvoiceItem | null;
+  allocations: TableRow[];
   paid_before: string | null;
   balance_after: string | null;
   received_by: string | null;
@@ -351,9 +411,21 @@ export type ReportsOverview = {
   floor_occupancy_rows: TableRow[];
   collections_by_method: TableRow[];
   aging_rows: TableRow[];
+  aging_total: number;
+  aging_page: number;
+  aging_page_size: number;
   room_utilization: TableRow[];
+  room_utilization_total: number;
+  room_page: number;
+  room_page_size: number;
   conversion_rows: TableRow[];
   tenant_finance_rows: TableRow[];
+  tenant_finance_total: number;
+  finance_page: number;
+  finance_page_size: number;
+  available_academic_years: AcademicYearSummary[];
+  selected_academic_year_id: number | null;
+  tenant_query: string;
 };
 
 export type NotificationSettings = {
@@ -426,6 +498,7 @@ export type SettingsOverview = {
   worker_status: WorkerStatus;
   cashier_scope: string[];
   admin_scope: string[];
+  academic_years: AcademicYearSummary[];
 };
 
 export type ActionResponse = {

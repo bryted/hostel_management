@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.models import Bed, Block, Floor, Room
-from app.services.common import format_money, get_base_currency
+from app.services.common import format_money, get_base_currency, select_operational_bed_rows
 from app.services.onboarding import get_onboarding_pipeline, get_onboarding_queue
 from ...deps import get_db_session, require_admin
 from ...schemas import BedOption, OnboardingOverviewResponse, OnboardingQueueItem
@@ -102,11 +102,7 @@ def get_onboarding_overview(
         for row in rows[:limit]
     ]
     bed_rows = session.execute(
-        select(Bed, Room, Floor, Block)
-        .join(Room, Room.id == Bed.room_id)
-        .join(Block, Block.id == Room.block_id)
-        .outerjoin(Floor, Floor.id == Room.floor_id)
-        .where(Bed.status == "AVAILABLE")
+        select_operational_bed_rows()
         .order_by(Block.name.asc(), Floor.floor_label.asc(), Room.room_code.asc(), Bed.bed_number.asc())
         .limit(100)
     ).all()

@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from app.models import Invoice, NotificationOutbox, NotificationSettings, Receipt, User
 from app.services.auth import hash_password
+from app.services.invoicing import create_invoice
 from app.services.reservations import expire_reservations_batch
 from backend.hostel_api.config import settings
 from backend.hostel_api.deps import get_db_session
@@ -81,6 +82,7 @@ def test_workspace_and_transfer_endpoint(factory, db_session):
             payload = workspace.json()
             assert payload["tenant"]["name"] == "Resident One"
             assert payload["active_allocation"]["bed_id"] == old_bed.id
+            assert payload["active_allocation"]["academic_year"]
             assert payload["available_beds"][0]["bed_id"] == new_bed.id
 
             transfer = client.post(
@@ -94,6 +96,97 @@ def test_workspace_and_transfer_endpoint(factory, db_session):
             assert refreshed.status_code == 200
             refreshed_payload = refreshed.json()
             assert refreshed_payload["active_allocation"]["bed_id"] == new_bed.id
+            assert refreshed_payload["active_allocation"]["academic_year"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_tenant_workspace_uses_independent_pagination(factory, db_session):
+    admin = factory.create_user(full_name="Workspace Pager", is_admin=True)
+    admin.password_hash = hash_password("StrongPass1!")
+    block = factory.create_block("Workspace Pager Block")
+    floor = factory.create_floor(block, "Floor 1")
+    room = factory.create_room(block, floor, room_code="WP-101", room_type="1_IN_ROOM", beds_count=1)
+    bed = factory.create_bed(room, 1, status="AVAILABLE")
+    tenant = factory.create_tenant("Workspace Pager Tenant", status="active")
+
+    for _ in range(21):
+        invoice = factory.create_invoice(tenant, user=admin, reserved_bed=bed, total=Decimal("1000.00"))
+        payment = factory.create_payment(tenant, invoice, Decimal("1000.00"), user=admin)
+        db_session.add(
+            Receipt(
+                tenant_id=tenant.id,
+                payment_id=payment.id,
+                amount=payment.amount,
+                currency=payment.currency,
+                issued_at=datetime.now(timezone.utc),
+            )
+        )
+    db_session.flush()
+
+    try:
+        with _build_client(db_session) as client:
+            login = client.post(
+                "/api/v1/auth/login",
+                json={"username": admin.email, "password": "StrongPass1!"},
+            )
+            assert login.status_code == 200
+
+            workspace = client.get(
+                f"/api/v1/tenants/{tenant.id}/workspace",
+                params={
+                    "invoice_page": 2,
+                    "payment_page": 2,
+                    "receipt_page": 2,
+                    "timeline_page": 2,
+                },
+            )
+            assert workspace.status_code == 200
+            payload = workspace.json()
+            assert payload["invoice_total"] == 21
+            assert payload["invoice_page"] == 2
+            assert len(payload["invoices"]) == 1
+            assert payload["payment_total"] == 21
+            assert payload["payment_page"] == 2
+            assert len(payload["payments"]) == 1
+            assert payload["receipt_total"] == 21
+            assert payload["receipt_page"] == 2
+            assert len(payload["receipts"]) == 1
+            assert payload["timeline_total"] >= 42
+            assert payload["timeline_page"] == 2
+            assert len(payload["timeline"]) >= 1
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_tenant_directory_returns_paged_counts(factory, db_session):
+    admin = factory.create_user(full_name="Directory Admin", is_admin=True)
+    admin.password_hash = hash_password("StrongPass1!")
+    for index in range(30):
+        status = "active" if index < 10 else "prospect" if index < 20 else "inactive"
+        tenant = factory.create_tenant(f"Directory Tenant {index:02d}", status=status)
+        tenant.email = f"directory-{index:02d}@example.com"
+        tenant.phone = f"233555{index:04d}"
+    db_session.flush()
+
+    try:
+        with _build_client(db_session) as client:
+            login = client.post(
+                "/api/v1/auth/login",
+                json={"username": admin.email, "password": "StrongPass1!"},
+            )
+            assert login.status_code == 200
+
+            directory = client.get("/api/v1/tenants", params={"search": "Directory Tenant", "page": 2, "page_size": 10})
+            assert directory.status_code == 200
+            payload = directory.json()
+            assert payload["page"] == 2
+            assert payload["page_size"] == 10
+            assert payload["total"] == 30
+            assert payload["active_total"] == 10
+            assert payload["prospect_total"] == 10
+            assert payload["inactive_total"] == 10
+            assert len(payload["rows"]) == 10
     finally:
         app.dependency_overrides.clear()
 
@@ -218,6 +311,106 @@ def test_invoice_create_payment_and_receipt_routes(factory, db_session):
             pdf = client.get(f"/api/v1/receipts/{receipt_id}/pdf")
             assert pdf.status_code == 200
             assert pdf.headers["content-type"] == "application/pdf"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_billing_payment_route_supports_multi_invoice_allocations(factory, db_session):
+    admin = factory.create_user(full_name="Split Billing Admin", is_admin=True)
+    admin.password_hash = hash_password("StrongPass1!")
+    block = factory.create_block("Split Billing Block")
+    floor = factory.create_floor(block, "Floor 1")
+    room = factory.create_room(
+        block,
+        floor,
+        room_code="SB-101",
+        room_type="2_IN_ROOM",
+        beds_count=2,
+        unit_price_per_bed=Decimal("1000.00"),
+    )
+    bed_a = factory.create_bed(room, 1, status="AVAILABLE")
+    bed_b = factory.create_bed(room, 2, status="AVAILABLE")
+    tenant = factory.create_tenant("Split Billing Tenant", status="prospect")
+    now = factory.now()
+    invoice_a = factory.create_invoice(
+        tenant,
+        user=admin,
+        reserved_bed=bed_a,
+        status="approved",
+        total=Decimal("1000.00"),
+    )
+    invoice_b = create_invoice(
+        db_session,
+        tenant_id=tenant.id,
+        user_id=admin.id,
+        reserved_bed_id=bed_b.id,
+        currency="GHS",
+        tax=Decimal("0"),
+        discount=Decimal("0"),
+        notes=None,
+        status="approved",
+        due_at=now,
+        hold_until=factory.now(hours=24),
+        now=now,
+    )
+    db_session.flush()
+
+    try:
+        with _build_client(db_session) as client:
+            login = client.post(
+                "/api/v1/auth/login",
+                json={"username": admin.email, "password": "StrongPass1!"},
+            )
+            assert login.status_code == 200
+
+            paid = client.post(
+                "/api/v1/billing/payments",
+                json={
+                    "tenant_id": tenant.id,
+                    "amount": 1500,
+                    "method": "bank_transfer",
+                    "reference": "BANK-SPLIT-001",
+                    "allocations": [
+                        {"invoice_id": invoice_a.id, "amount": 1000},
+                        {"invoice_id": invoice_b.id, "amount": 200},
+                    ],
+                },
+            )
+            assert paid.status_code == 200
+            payload = paid.json()
+            assert payload["payment_id"] is not None
+            assert payload["receipt_id"] is not None
+            assert payload["invoice_id"] is None
+
+            detail = client.get(f"/api/v1/receipts/{payload['receipt_id']}")
+            assert detail.status_code == 200
+            detail_payload = detail.json()
+            assert detail_payload["payment"]["invoice_summary"] == "Multiple (2)"
+            assert len(detail_payload["allocations"]) == 2
+            assert {row["Invoice"] for row in detail_payload["allocations"]} == {
+                invoice_a.invoice_no,
+                invoice_b.invoice_no,
+            }
+
+            billing = client.get("/api/v1/billing/overview", params={"search": "BANK-SPLIT-001"})
+            assert billing.status_code == 200
+            billing_payload = billing.json()
+            payment_row = next(row for row in billing_payload["payment_rows"] if row["payment_no"] == detail_payload["payment"]["payment_no"])
+            assert payment_row["invoice_summary"] == "Multiple (2)"
+
+            reports = client.get(
+                "/api/v1/reports/overview",
+                params={
+                    "section": "finance",
+                    "academic_year_id": invoice_a.academic_year_id,
+                    "tenant_query": "Split Billing Tenant",
+                },
+            )
+            assert reports.status_code == 200
+            report_payload = reports.json()
+            invoice_numbers = {row["Invoice"] for row in report_payload["tenant_finance_rows"]}
+            assert invoice_a.invoice_no in invoice_numbers
+            assert invoice_b.invoice_no in invoice_numbers
     finally:
         app.dependency_overrides.clear()
 
@@ -466,6 +659,8 @@ def test_allocations_reports_and_settings_routes(factory, db_session):
             report_payload = reports.json()
             assert report_payload["collected_today"]
             assert "room_utilization" in report_payload
+            assert "room_utilization_total" in report_payload
+            assert report_payload["finance_page"] == 1
 
             settings = client.get("/api/v1/settings/overview")
             assert settings.status_code == 200
@@ -501,6 +696,99 @@ def test_allocations_reports_and_settings_routes(factory, db_session):
             ).scalar_one_or_none()
             assert persisted is not None
             assert bool(persisted.is_admin) is False
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_reports_overview_trims_payload_by_section(factory, db_session):
+    admin = factory.create_user(full_name="Reports Admin", is_admin=True)
+    admin.password_hash = hash_password("StrongPass1!")
+    block = factory.create_block("Reports Block")
+    floor = factory.create_floor(block, "Level 1")
+    room = factory.create_room(block, floor, room_code="RP-101", room_type="2_IN_ROOM", beds_count=2)
+    bed = factory.create_bed(room, 1, status="AVAILABLE")
+    tenant = factory.create_tenant("Reports Tenant", status="prospect")
+    invoice = factory.create_invoice(tenant, user=admin, reserved_bed=bed, status="approved", total=Decimal("1000.00"))
+    factory.create_payment(tenant, invoice, Decimal("400.00"), user=admin)
+    db_session.flush()
+
+    try:
+        with _build_client(db_session) as client:
+            login = client.post(
+                "/api/v1/auth/login",
+                json={"username": admin.email, "password": "StrongPass1!"},
+            )
+            assert login.status_code == 200
+
+            finance = client.get("/api/v1/reports/overview", params={"section": "finance"})
+            assert finance.status_code == 200
+            finance_payload = finance.json()
+            assert finance_payload["collections_by_method"]
+            assert finance_payload["tenant_finance_rows"]
+            assert finance_payload["block_occupancy_rows"] == []
+            assert finance_payload["room_utilization"] == []
+            assert finance_payload["conversion_rows"] == []
+
+            occupancy = client.get("/api/v1/reports/overview", params={"section": "occupancy"})
+            assert occupancy.status_code == 200
+            occupancy_payload = occupancy.json()
+            assert occupancy_payload["block_occupancy_rows"]
+            assert occupancy_payload["room_utilization"]
+            assert occupancy_payload["collections_by_method"] == []
+            assert occupancy_payload["aging_rows"] == []
+            assert occupancy_payload["tenant_finance_rows"] == []
+            assert occupancy_payload["conversion_rows"] == []
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_beds_route_uses_paged_filtered_response(factory, db_session):
+    admin = factory.create_user(full_name="Beds Admin", is_admin=True)
+    admin.password_hash = hash_password("StrongPass1!")
+    block = factory.create_block("Beds Block")
+    floor = factory.create_floor(block, "Floor 1")
+    room = factory.create_room(
+        block,
+        floor,
+        room_code="BD-101",
+        room_type="3_IN_ROOM",
+        beds_count=3,
+        unit_price_per_bed=Decimal("1000.00"),
+    )
+    bed_one = factory.create_bed(room, 1, status="AVAILABLE")
+    bed_two = factory.create_bed(room, 2, status="RESERVED")
+    bed_three = factory.create_bed(room, 3, status="OCCUPIED")
+    tenant = factory.create_tenant("Beds Tenant", status="active")
+    invoice = factory.create_invoice(tenant, user=admin, reserved_bed=bed_two, status="approved", total=Decimal("1000.00"))
+    factory.create_reservation(bed_two, tenant=tenant, invoice=invoice, user=admin, expires_at=factory.now(hours=8))
+    paid_invoice = factory.create_invoice(tenant, user=admin, reserved_bed=bed_three, status="paid", total=Decimal("1000.00"))
+    factory.create_allocation(bed_three, tenant=tenant, invoice=paid_invoice, user=admin)
+    db_session.flush()
+
+    try:
+        with _build_client(db_session) as client:
+            login = client.post(
+                "/api/v1/auth/login",
+                json={"username": admin.email, "password": "StrongPass1!"},
+            )
+            assert login.status_code == 200
+
+            paged = client.get("/api/v1/beds", params={"page_size": 2, "search": block.name})
+            assert paged.status_code == 200
+            payload = paged.json()
+            assert payload["total"] == 3
+            assert payload["page"] == 1
+            assert payload["page_size"] == 2
+            assert len(payload["rows"]) == 2
+            assert payload["reserved_total"] == 1
+            assert payload["occupied_total"] == 1
+
+            filtered = client.get("/api/v1/beds", params={"search": invoice.invoice_no, "page_size": 10})
+            assert filtered.status_code == 200
+            filtered_payload = filtered.json()
+            assert filtered_payload["total"] == 1
+            assert filtered_payload["rows"][0]["invoice"] == invoice.invoice_no
+            assert filtered_payload["rows"][0]["tenant"] == tenant.name
     finally:
         app.dependency_overrides.clear()
 
@@ -791,7 +1079,7 @@ def test_tenant_crud_and_inventory_lifecycle_routes(factory, db_session):
                     "name": "Lifecycle Tenant",
                     "email": "tenant.lifecycle@example.com",
                     "phone": "2335551000",
-                    "status": "active",
+                    "status": "prospect",
                     "room": "Desk 1",
                 },
             )
@@ -799,7 +1087,9 @@ def test_tenant_crud_and_inventory_lifecycle_routes(factory, db_session):
 
             directory = client.get("/api/v1/tenants", params={"search": "Lifecycle Tenant"})
             assert directory.status_code == 200
-            assert directory.json()[0]["room"] == "Desk 1"
+            directory_payload = directory.json()
+            assert directory_payload["rows"][0]["room"] == "Desk 1"
+            assert directory_payload["total"] >= 1
 
             block_update = client.post(
                 f"/api/v1/inventory/blocks/{block.id}",
@@ -840,6 +1130,89 @@ def test_tenant_crud_and_inventory_lifecycle_routes(factory, db_session):
 
             archived = client.post(f"/api/v1/tenants/{tenant_id}/archive", json={})
             assert archived.status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_tenant_status_guards_and_inactive_inventory_filters(factory, db_session):
+    admin = factory.create_user(full_name="Tenant Guard Admin", is_admin=True)
+    admin.password_hash = hash_password("StrongPass1!")
+    cashier = factory.create_user(full_name="Tenant Guard Cashier", is_admin=False)
+    cashier.password_hash = hash_password("StrongPass1!")
+    block = factory.create_block("Guard Block")
+    floor = factory.create_floor(block, "Level 1")
+    active_room = factory.create_room(block, floor, room_code="G-101", room_type="1_IN_ROOM", beds_count=1)
+    active_bed = factory.create_bed(active_room, 1, status="AVAILABLE")
+    inactive_room = factory.create_room(
+        block,
+        floor,
+        room_code="G-102",
+        room_type="1_IN_ROOM",
+        beds_count=1,
+        is_active=False,
+    )
+    inactive_bed = factory.create_bed(inactive_room, 1, status="AVAILABLE")
+    tenant = factory.create_tenant("Guard Tenant", status="prospect")
+    db_session.flush()
+
+    try:
+        with _build_client(db_session) as client:
+            login = client.post(
+                "/api/v1/auth/login",
+                json={"username": admin.email, "password": "StrongPass1!"},
+            )
+            assert login.status_code == 200
+
+            workspace = client.get(f"/api/v1/tenants/{tenant.id}/workspace")
+            assert workspace.status_code == 200
+            available_bed_ids = [row["bed_id"] for row in workspace.json()["available_beds"]]
+            assert active_bed.id in available_bed_ids
+            assert inactive_bed.id not in available_bed_ids
+
+            invalid_activate = client.post(
+                f"/api/v1/tenants/{tenant.id}",
+                json={
+                    "name": tenant.name,
+                    "email": "",
+                    "phone": "",
+                    "status": "active",
+                    "room": "",
+                },
+            )
+            assert invalid_activate.status_code == 400
+            assert "payment or confirmed allocation" in invalid_activate.json()["detail"]
+
+            invoice = factory.create_invoice(
+                tenant,
+                user=admin,
+                reserved_bed=active_bed,
+                status="approved",
+                total=Decimal("900.00"),
+            )
+            db_session.flush()
+
+            archived = client.post(f"/api/v1/tenants/{tenant.id}/archive", json={})
+            assert archived.status_code == 400
+            assert "End active stays, release holds, and close unsettled invoices" in archived.json()["detail"]
+
+        with _build_client(db_session) as cashier_client:
+            login = cashier_client.post(
+                "/api/v1/auth/login",
+                json={"username": cashier.email, "password": "StrongPass1!"},
+            )
+            assert login.status_code == 200
+
+            forbidden = cashier_client.post(
+                f"/api/v1/tenants/{tenant.id}",
+                json={
+                    "name": tenant.name,
+                    "email": "",
+                    "phone": "",
+                    "status": "inactive",
+                    "room": "",
+                },
+            )
+            assert forbidden.status_code == 403
     finally:
         app.dependency_overrides.clear()
 

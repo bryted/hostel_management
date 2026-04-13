@@ -44,6 +44,27 @@ function toneForInvoiceStatus(status: string): "success" | "warning" | "accent" 
   return "default";
 }
 
+function invoiceStatusLabel(status: string): string {
+  if (status === "approved") {
+    return "Ready for payment";
+  }
+  if (status === "partially_paid") {
+    return "Partially paid";
+  }
+  if (status === "submitted") {
+    return "Waiting for approval";
+  }
+  return status.replace("_", " ");
+}
+
+function queueLabel(queue: QueueFilter): string {
+  if (queue === "collect") return "Ready for payment";
+  if (queue === "partial") return "Partially paid";
+  if (queue === "review") return "Waiting for review";
+  if (queue === "expired") return "Expired room holds";
+  return "All";
+}
+
 function holdText(invoice: {
   hold_expired: boolean;
   hold_hours_left: number | null;
@@ -244,8 +265,10 @@ export default async function BillingPage({ searchParams }: PageProps) {
   const ledgerPages = totalPages(ledgerTotal, ledgerPageSize);
   const activeFilterItems = [
     search ? { label: "Search", value: search, tone: "accent" as const } : null,
-    queueFilter !== "all" ? { label: "Queue", value: queueFilter.replace("_", " "), tone: "warning" as const } : null,
-    ledgerFilter !== "invoices" ? { label: "Ledger", value: ledgerFilter, tone: "default" as const } : null,
+    queueFilter !== "all" ? { label: "Queue", value: queueLabel(queueFilter), tone: "warning" as const } : null,
+    ledgerFilter !== "invoices"
+      ? { label: "Ledger", value: ledgerFilter === "payments" ? "Payments" : "Receipts", tone: "default" as const }
+      : null,
     invoiceStatusFilter !== "open"
       ? { label: "Invoice status", value: invoiceStatusFilter.replace("_", " "), tone: "success" as const }
       : null,
@@ -255,10 +278,10 @@ export default async function BillingPage({ searchParams }: PageProps) {
     <div className="grid">
       <PageIntro
         title="Billing"
-        description={`The billing desk is organized around active balances first. Bed holds stay active for ${billing.default_hold_hours}h after approval and release automatically if unpaid.`}
+        description={`Start with residents who are ready for payment or already part-paid. Room holds stay active for ${billing.default_hold_hours}h after approval and release automatically if unpaid.`}
         aside={
           <>
-            {search ? <StatusPill tone="accent">Filtered</StatusPill> : <StatusPill>Focus mode</StatusPill>}
+            {search ? <StatusPill tone="accent">Filtered</StatusPill> : <StatusPill>Collections workspace</StatusPill>}
             <StatusPill tone={billing.block_duplicate_payment_reference ? "warning" : "default"}>
               {billing.block_duplicate_payment_reference ? "Duplicate refs blocked" : "Duplicate refs warn only"}
             </StatusPill>
@@ -307,13 +330,14 @@ export default async function BillingPage({ searchParams }: PageProps) {
         <DataPanel
           title="Action queue"
           description="Work this list first. It covers collection, partial balances, review, and expired-hold recovery."
+          tone="primary"
           toolbar={
             <div className="inline-actions">
               <Link className={queueFilter === "all" ? "button small" : "button small ghost"} href={buildBillingHref({ queue: "all", page: null })}>
                 All
               </Link>
               <Link className={queueFilter === "collect" ? "button success small" : "button small ghost"} href={buildBillingHref({ queue: "collect", page: null })}>
-                Ready
+                Ready for payment
               </Link>
               <Link className={queueFilter === "partial" ? "button success small" : "button small ghost"} href={buildBillingHref({ queue: "partial", page: null })}>
                 Partials
@@ -322,7 +346,7 @@ export default async function BillingPage({ searchParams }: PageProps) {
                 Review
               </Link>
               <Link className={queueFilter === "expired" ? "button warning small" : "button small ghost"} href={buildBillingHref({ queue: "expired", page: null })}>
-                Expired holds
+                Expired room holds
               </Link>
             </div>
           }
@@ -336,12 +360,12 @@ export default async function BillingPage({ searchParams }: PageProps) {
                     <div className="meta-row">
                       <strong>{invoice.invoice_no}</strong>
                       <div className="inline-actions">
-                        <StatusPill tone={toneForInvoiceStatus(invoice.status)}>{invoice.status}</StatusPill>
+                        <StatusPill tone={toneForInvoiceStatus(invoice.status)}>{invoiceStatusLabel(invoice.status)}</StatusPill>
                         {invoice.hold_expired ? <StatusPill tone="warning">Hold expired</StatusPill> : null}
                       </div>
                     </div>
                     <span>
-                      {invoice.tenant_name} | Balance {invoice.balance} | Paid {invoice.paid_total} | Due {invoice.due_at ?? "-"} | {holdText(invoice)}
+                      {invoice.tenant_name} | Year {invoice.academic_year ?? "-"} | Balance {invoice.balance} | Paid {invoice.paid_total} | Due {invoice.due_at ?? "-"} | {holdText(invoice)}
                     </span>
                     <div className="inline-actions">
                       <Link className={primaryAction.className} href={primaryAction.href}>
@@ -376,8 +400,9 @@ export default async function BillingPage({ searchParams }: PageProps) {
       </div>
 
       <DataPanel
-        title="History"
-        description="Keep the ledger focused on the current desk task. Paid invoices are hidden by default and remain available through filters, payments, and receipts."
+          title="History"
+          description="Keep the ledger focused on the current desk task. Actionable invoices stay front and center, while the full payment and receipt history remains close by."
+          tone="secondary"
         toolbar={
           <div className="inline-actions">
             <Link className={ledgerFilter === "invoices" ? "button small" : "button small ghost"} href={buildBillingHref({ ledger: "invoices", page: null })}>
@@ -396,7 +421,7 @@ export default async function BillingPage({ searchParams }: PageProps) {
           <div className="stack tight">
             <div className="inline-actions">
               <Link className={invoiceStatusFilter === "open" ? "button small" : "button small ghost"} href={buildBillingHref({ invoiceStatus: "open", page: null })}>
-                Open only
+                Actionable
               </Link>
               <Link className={invoiceStatusFilter === "partial" ? "button success small" : "button small ghost"} href={buildBillingHref({ invoiceStatus: "partial", page: null })}>
                 Partially paid
@@ -420,6 +445,7 @@ export default async function BillingPage({ searchParams }: PageProps) {
                     <th>Balance</th>
                     <th>Hold</th>
                     <th>Due</th>
+                    <th>Year</th>
                     <th>Open</th>
                   </tr>
                 </thead>
@@ -433,7 +459,7 @@ export default async function BillingPage({ searchParams }: PageProps) {
                         <td>{invoice.tenant_name}</td>
                         <td>
                           <div className="inline-actions">
-                            <StatusPill tone={toneForInvoiceStatus(invoice.status)}>{invoice.status}</StatusPill>
+                            <StatusPill tone={toneForInvoiceStatus(invoice.status)}>{invoiceStatusLabel(invoice.status)}</StatusPill>
                             {invoice.hold_expired ? <StatusPill tone="warning">Hold expired</StatusPill> : null}
                           </div>
                         </td>
@@ -442,6 +468,7 @@ export default async function BillingPage({ searchParams }: PageProps) {
                         <td>{invoice.balance}</td>
                         <td>{holdText(invoice)}</td>
                         <td>{invoice.due_at ?? "-"}</td>
+                        <td>{invoice.academic_year ?? "-"}</td>
                         <td>
                           <Link className="button small" href={`/invoices/${invoice.id}`}>
                             View
@@ -451,7 +478,7 @@ export default async function BillingPage({ searchParams }: PageProps) {
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={9} className="small">
+                      <td colSpan={10} className="small">
                         No invoices match the current billing filter.
                       </td>
                     </tr>
@@ -471,8 +498,12 @@ export default async function BillingPage({ searchParams }: PageProps) {
                   <th>Tenant</th>
                   <th>Invoice</th>
                   <th>Amount</th>
+                  <th>Invoices</th>
+                  <th>Allocated</th>
+                  <th>Unallocated</th>
                   <th>Method</th>
                   <th>Status</th>
+                  <th>Year</th>
                 </tr>
               </thead>
               <tbody>
@@ -483,17 +514,21 @@ export default async function BillingPage({ searchParams }: PageProps) {
                       <td>{payment.tenant_name}</td>
                       <td>{payment.invoice_no ?? "-"}</td>
                       <td>{payment.amount}</td>
+                      <td>{payment.invoice_summary ?? payment.invoice_no ?? "-"}</td>
+                      <td>{payment.allocated_total ?? "-"}</td>
+                      <td>{payment.unallocated_amount ?? "-"}</td>
                       <td>{payment.method ?? "-"}</td>
                       <td>
                         <StatusPill tone={payment.status === "completed" ? "success" : "warning"}>
-                          {payment.status}
+                          {payment.status.replace("_", " ")}
                         </StatusPill>
                       </td>
+                      <td>{payment.academic_year ?? "-"}</td>
                     </tr>
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={6} className="small">
+                    <td colSpan={10} className="small">
                       No recent payments match the current filter.
                     </td>
                   </tr>
@@ -511,9 +546,10 @@ export default async function BillingPage({ searchParams }: PageProps) {
                   <th>Receipt</th>
                   <th>Tenant</th>
                   <th>Payment</th>
-                  <th>Invoice</th>
+                  <th>Invoices</th>
                   <th>Amount</th>
                   <th>Printed</th>
+                  <th>Year</th>
                 </tr>
               </thead>
               <tbody>
@@ -532,9 +568,10 @@ export default async function BillingPage({ searchParams }: PageProps) {
                       </td>
                       <td>{receipt.tenant_name}</td>
                       <td>{receipt.payment_no ?? "-"}</td>
-                      <td>{receipt.invoice_no ?? "-"}</td>
+                      <td>{receipt.invoice_summary ?? receipt.invoice_no ?? "-"}</td>
                       <td>{receipt.amount}</td>
                       <td>{receipt.printed_count}</td>
+                      <td>{receipt.academic_year ?? "-"}</td>
                     </tr>
                   ))
                 ) : (
@@ -571,7 +608,11 @@ export default async function BillingPage({ searchParams }: PageProps) {
       </DataPanel>
 
       <div className="grid two workspace-grid">
-        <DataPanel title="Selected record">
+        <DataPanel
+          title="Selected record"
+          description="Use this side panel to confirm the record you are about to act on without leaving the billing workspace."
+          tone="supporting"
+        >
           {invoiceDetail ? (
             <div className="stack tight">
               <div className="meta-list">
@@ -586,7 +627,7 @@ export default async function BillingPage({ searchParams }: PageProps) {
                 <div className="meta-row">
                   <span>Status</span>
                   <StatusPill tone={toneForInvoiceStatus(invoiceDetail.invoice.status)}>
-                    {invoiceDetail.invoice.status}
+                    {invoiceStatusLabel(invoiceDetail.invoice.status)}
                   </StatusPill>
                 </div>
                 <div className="meta-row">
@@ -604,6 +645,10 @@ export default async function BillingPage({ searchParams }: PageProps) {
                 <div className="meta-row">
                   <span>Reserved bed</span>
                   <strong>{invoiceDetail.reserved_bed_label ?? "No reserved bed"}</strong>
+                </div>
+                <div className="meta-row">
+                  <span>Academic year</span>
+                  <strong>{invoiceDetail.invoice.academic_year ?? "-"}</strong>
                 </div>
               </div>
               <div className="inline-actions">

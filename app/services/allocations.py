@@ -16,22 +16,18 @@ from app.models import (
     BedReservation,
     Invoice,
     InvoiceEvent,
-    Payment,
     Tenant,
     TenantEvent,
     User,
 )
+from app.services.academic_years import resolve_academic_year
+from app.services.common import bed_is_in_operational_inventory
+from app.services.invoicing import get_paid_total
 from app.services.types import AllocationResult
 
 
 def _paid_total_for_invoice(session: Session, invoice_id: int) -> Decimal:
-    total = session.execute(
-        select(sa.func.coalesce(sa.func.sum(Payment.amount), 0)).where(
-            Payment.invoice_id == invoice_id,
-            Payment.status != "voided",
-        )
-    ).scalar_one()
-    return Decimal(str(total or 0))
+    return get_paid_total(session, invoice_id)
 
 
 def assign_bed_for_paid_invoice(
@@ -79,6 +75,8 @@ def assign_bed_for_paid_invoice(
     bed = session.get(Bed, bed_id)
     if bed is None:
         raise ValueError("Bed not found.")
+    if not bed_is_in_operational_inventory(session, int(bed.id)):
+        raise ValueError("Bed is in inactive inventory.")
     if bed.status == "OUT_OF_SERVICE":
         raise ValueError("Bed is out of service.")
     if bed.status == "OCCUPIED":
@@ -126,6 +124,7 @@ def assign_bed_for_paid_invoice(
         bed_id=bed.id,
         tenant_id=invoice.tenant_id,
         invoice_id=invoice.id,
+        academic_year_id=invoice.academic_year_id or resolve_academic_year(session, as_of=now).id,
         status="CONFIRMED",
         start_date=now,
     )

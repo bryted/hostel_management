@@ -34,6 +34,22 @@ export function TenantActions({
   const [phone, setPhone] = useState(tenant?.phone ?? "");
   const [status, setStatus] = useState(tenant?.status ?? defaultStatus);
   const [room, setRoom] = useState(tenant?.room ?? "");
+  const statusOptions = !tenant
+    ? [{ value: "prospect", label: "Prospect" }]
+    : tenant.status === "active"
+      ? [
+          { value: "active", label: "Active" },
+          { value: "inactive", label: "Inactive" },
+        ]
+      : tenant.status === "inactive"
+        ? [
+            { value: "inactive", label: "Inactive" },
+            { value: "prospect", label: "Prospect" },
+          ]
+        : [
+            { value: "prospect", label: "Prospect" },
+            { value: "inactive", label: "Inactive" },
+          ];
 
   async function submit() {
     const confirmation = buildConfirmationMessage(
@@ -126,9 +142,11 @@ export function TenantActions({
               <label className="field">
                 <span>Status</span>
                 <select value={status} onChange={(event) => setStatus(event.target.value)}>
-                  <option value="prospect">Prospect</option>
-                  <option value="active">Active</option>
-                  <option value="inactive">Inactive</option>
+                  {statusOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
                 </select>
               </label>
               <label className="field">
@@ -136,6 +154,9 @@ export function TenantActions({
                 <input value={room} onChange={(event) => setRoom(event.target.value)} placeholder="Optional room note" />
               </label>
             </div>
+            <p className="section-note">
+              Tenant status is mostly workflow-driven. New tenants start as prospects, and active status comes from payment or confirmed allocation.
+            </p>
             <div className="inline-actions">
               <button className="button" disabled={pending || !name.trim()} onClick={submit} type="button">
                 {tenant ? "Save tenant" : "Create tenant"}

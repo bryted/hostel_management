@@ -1,14 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getServerApiBaseUrl } from "../../../../lib/api";
-
-function extractSessionCookie(setCookieHeader: string | null): string | null {
-  if (!setCookieHeader) {
-    return null;
-  }
-  const match = setCookieHeader.match(/hostel_session=([^;]+)/);
-  return match ? match[1] : null;
-}
+import { forwardSessionCookie } from "../../../../lib/session-cookie";
 
 export async function POST(request: Request) {
   const payload = await request.json();
@@ -28,13 +21,6 @@ export async function POST(request: Request) {
       "Content-Type": response.headers.get("content-type") ?? "application/json",
     },
   });
-  const sessionValue = extractSessionCookie(response.headers.get("set-cookie"));
-  if (sessionValue) {
-    nextResponse.cookies.set("hostel_session", sessionValue, {
-      httpOnly: true,
-      path: "/",
-      sameSite: "lax",
-    });
-  }
+  forwardSessionCookie(response, nextResponse);
   return nextResponse;
 }

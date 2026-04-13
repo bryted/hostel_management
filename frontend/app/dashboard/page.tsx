@@ -17,6 +17,10 @@ function formatRangeLabel(startDate: string, endDate: string): string {
   return "Collected in range";
 }
 
+function dashboardQueueLabel(count: number): string {
+  return count === 1 ? "1 item needs attention" : `${count} items need attention`;
+}
+
 export default async function DashboardPage({ searchParams }: PageProps) {
   const user = await requireUser();
   const params = await searchParams;
@@ -80,7 +84,10 @@ export default async function DashboardPage({ searchParams }: PageProps) {
         }
         aside={
           <>
-            <StatusPill tone={queuePressure ? "warning" : "success"}>{queuePressure} items need action</StatusPill>
+            <StatusPill tone={queuePressure ? "warning" : "success"}>{dashboardQueueLabel(queuePressure)}</StatusPill>
+            {summary.current_academic_year ? (
+              <StatusPill tone="accent">{summary.current_academic_year}</StatusPill>
+            ) : null}
             <StatusPill tone="accent">
               {summary.start_date} to {summary.end_date}
             </StatusPill>
@@ -123,18 +130,18 @@ export default async function DashboardPage({ searchParams }: PageProps) {
         ]}
       />
       <div className="grid two">
-        <DataPanel title="Pipeline">
+        <DataPanel title="Pipeline" description="Current operating pressure across collection, approval, and room assignment." tone="primary">
           <div className="detail-grid">
             <div className="detail-card">
               <h4>Prospects</h4>
               <strong>{summary.prospects}</strong>
             </div>
             <div className="detail-card">
-              <h4>Approved unpaid</h4>
+              <h4>Ready for payment</h4>
               <strong>{summary.approved_unpaid}</strong>
             </div>
             <div className="detail-card">
-              <h4>Paid unallocated</h4>
+              <h4>Ready for room assignment</h4>
               <strong>{summary.paid_unallocated}</strong>
             </div>
             <div className="detail-card">
@@ -151,7 +158,7 @@ export default async function DashboardPage({ searchParams }: PageProps) {
             </div>
           </div>
         </DataPanel>
-        <DataPanel title="Quick actions">
+        <DataPanel title="Quick actions" description="Shortest path into the main operational work queues." tone="supporting">
           <div className="shortcut-grid">
             {(user.is_admin ? adminCards : cashierCards).map((card) => (
               <div key={card.href} className="shortcut-tile">

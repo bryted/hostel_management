@@ -8,6 +8,7 @@ type PageProps = {
   searchParams: Promise<{
     search?: string;
     status?: string;
+    page?: string;
   }>;
 };
 
@@ -29,15 +30,35 @@ export default async function BedsPage({ searchParams }: PageProps) {
   const params = await searchParams;
   const search = params.search ?? "";
   const status = params.status ?? "";
-  const beds = await fetchBeds(search, status);
-  const availableCount = beds.filter((bed) => bed.status === "AVAILABLE").length;
-  const reservedCount = beds.filter((bed) => bed.status === "RESERVED").length;
-  const occupiedCount = beds.filter((bed) => bed.status === "OCCUPIED").length;
-  const outCount = beds.filter((bed) => bed.status === "OUT_OF_SERVICE").length;
+  const page = Math.max(1, Number(params.page || "1") || 1);
+  const beds = await fetchBeds(search, status, page);
+  const totalPages = Math.max(1, Math.ceil(beds.total / beds.page_size));
   const activeFilterItems = [
     search ? { label: "Search", value: search, tone: "accent" as const } : null,
     status ? { label: "Status", value: status, tone: "warning" as const } : null,
   ].filter((item): item is NonNullable<typeof item> => Boolean(item));
+
+  function buildBedsHref(overrides: {
+    search?: string;
+    status?: string;
+    page?: string | null;
+  }): string {
+    const query = new URLSearchParams();
+    const nextSearch = overrides.search ?? search;
+    const nextStatus = overrides.status ?? status;
+    const nextPage = overrides.page === undefined ? String(page) : overrides.page ?? "";
+    if (nextSearch) {
+      query.set("search", nextSearch);
+    }
+    if (nextStatus) {
+      query.set("status", nextStatus);
+    }
+    if (nextPage && nextPage !== "1") {
+      query.set("page", nextPage);
+    }
+    const suffix = query.toString();
+    return suffix ? `/beds?${suffix}` : "/beds";
+  }
 
   return (
     <div className="grid">
@@ -92,65 +113,86 @@ export default async function BedsPage({ searchParams }: PageProps) {
       </section>
       <SummaryStrip
         items={[
-          { label: "Visible beds", value: beds.length, tone: "default" },
-          { label: "Available", value: availableCount, tone: "success" },
-          { label: "Reserved", value: reservedCount, tone: "warning" },
-          { label: "Occupied", value: occupiedCount, tone: "accent" },
-          { label: "Out of service", value: outCount, tone: "default" },
+          { label: "Visible beds", value: beds.total, tone: "default" },
+          { label: "Available", value: beds.available_total, tone: "success" },
+          { label: "Reserved", value: beds.reserved_total, tone: "warning" },
+          { label: "Occupied", value: beds.occupied_total, tone: "accent" },
+          { label: "Out of service", value: beds.out_of_service_total, tone: "default" },
         ]}
       />
-      <DataPanel title="Register">
-        {!beds.length ? (
-          <p className="section-note">
+      <DataPanel title="Register" description="Live rooming register with maintenance controls and tenant context." tone="primary">
+        {!beds.rows.length ? (
+          <p className="empty-state">
             No beds match the current filters. Adjust the status filter or search
             for a different room, tenant, or invoice.
           </p>
         ) : null}
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Location</th>
-              <th>Status</th>
-              <th>Tenant</th>
-              <th>Invoice</th>
-              <th>Price</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {beds.length ? (
-              beds.map((bed) => (
-                <tr key={bed.bed_id}>
-                  <td>
-                    {bed.block} / {bed.floor} / {bed.room} / {bed.bed}
-                  </td>
-                  <td>
-                    <span className={badgeClass(bed.status)}>{bed.status}</span>
-                  </td>
-                  <td>{bed.tenant ?? "-"}</td>
-                  <td>{bed.invoice ?? "-"}</td>
-                  <td>{bed.price_per_bed}</td>
-                  <td>
-                    <div className="stack tight">
-                      {bed.tenant_id ? (
-                        <Link className="button small" href={`/tenants/${bed.tenant_id}`}>
-                          Open workspace
-                        </Link>
-                      ) : null}
-                      <BedMaintenanceForm bed={bed} canEdit={user.is_admin} />
-                    </div>
+        <div className="table-scroll">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Location</th>
+                <th>Status</th>
+                <th>Tenant</th>
+                <th>Invoice</th>
+                <th>Price</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {beds.rows.length ? (
+                beds.rows.map((bed) => (
+                  <tr key={bed.bed_id}>
+                    <td>
+                      {bed.block} / {bed.floor} / {bed.room} / {bed.bed}
+                    </td>
+                    <td>
+                      <span className={badgeClass(bed.status)}>{bed.status}</span>
+                    </td>
+                    <td>{bed.tenant ?? "-"}</td>
+                    <td>{bed.invoice ?? "-"}</td>
+                    <td>{bed.price_per_bed}</td>
+                    <td>
+                      <div className="stack tight">
+                        {bed.tenant_id ? (
+                          <Link className="button small" href={`/tenants/${bed.tenant_id}`}>
+                            Open workspace
+                          </Link>
+                        ) : null}
+                        <BedMaintenanceForm bed={bed} canEdit={user.is_admin} />
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={6} className="small">
+                    No bed rows match the current filters.
                   </td>
                 </tr>
-              ))
-            ) : (
-              <tr>
-                <td colSpan={6} className="small">
-                  No bed rows match the current filters.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="ledger-pagination">
+          <span className="small">
+            Page {Math.min(page, totalPages)} of {totalPages} | {beds.total} bed(s)
+          </span>
+          <div className="inline-actions">
+            <Link
+              className={page <= 1 ? "button small ghost disabled-link" : "button small ghost"}
+              href={page <= 1 ? buildBedsHref({ page: "1" }) : buildBedsHref({ page: String(page - 1) })}
+            >
+              Previous
+            </Link>
+            <Link
+              className={page >= totalPages ? "button small ghost disabled-link" : "button small ghost"}
+              href={page >= totalPages ? buildBedsHref({ page: String(totalPages) }) : buildBedsHref({ page: String(page + 1) })}
+            >
+              Next
+            </Link>
+          </div>
+        </div>
       </DataPanel>
     </div>
   );

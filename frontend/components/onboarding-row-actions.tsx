@@ -17,6 +17,14 @@ function moneyValue(value: string): number {
   return Number.isFinite(normalized) ? normalized : 0;
 }
 
+const PAYMENT_METHOD_OPTIONS = [
+  { value: "cash", label: "Cash" },
+  { value: "card", label: "Card" },
+  { value: "bank_transfer", label: "Bank transfer" },
+  { value: "mobile_money", label: "Mobile money" },
+  { value: "check", label: "Check" },
+];
+
 type Props = {
   row: OnboardingQueueItem;
   user: User;
@@ -40,6 +48,7 @@ export function OnboardingRowActions({ row, user, availableBeds }: Props) {
     || paymentAmount <= 0
     || paymentAmount > remainingBalance;
   const referenceMissing = method !== "cash" && !reference.trim();
+  const selectedBed = availableBeds.find((bed) => String(bed.bed_id) === bedId) ?? null;
 
   async function runAction(path: string, payload: object, confirmation: string) {
     if (!(await confirmAction(confirmation))) {
@@ -74,11 +83,11 @@ export function OnboardingRowActions({ row, user, availableBeds }: Props) {
             placeholder={`Balance ${row.balance}`}
           />
           <select value={method} onChange={(event) => setMethod(event.target.value)}>
-            <option value="cash">cash</option>
-            <option value="card">card</option>
-            <option value="bank_transfer">bank_transfer</option>
-            <option value="mobile_money">mobile_money</option>
-            <option value="check">check</option>
+            {PAYMENT_METHOD_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
           </select>
           <input
             value={reference}
@@ -145,7 +154,7 @@ export function OnboardingRowActions({ row, user, availableBeds }: Props) {
                 buildConfirmationMessage("Assign this paid tenant to a bed?", [
                   `Tenant: ${row.tenant_name}`,
                   `Invoice: ${row.invoice_no}`,
-                  `Bed ID: ${bedId}`,
+                  selectedBed ? `Bed: ${selectedBed.label}` : null,
                 ]),
               )
             }

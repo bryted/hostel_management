@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from app.models import TenantEvent
 from app.services.onboarding import get_onboarding_pipeline, get_onboarding_queue
 
 
@@ -113,3 +114,41 @@ def test_onboarding_pipeline_counts_match_queue_stage_counts(factory, db_session
     assert invoice_paid.id in [int(row["Invoice ID"]) for row in queue]
     assert pipeline.prospects_with_approved_unpaid == approved_count
     assert pipeline.paid_unallocated_tenants == paid_count
+
+
+def test_onboarding_pipeline_scopes_prospect_and_recent_activation_counts(factory, db_session):
+    admin = factory.create_user("onboard-admin-6@example.com")
+
+    block_a = factory.create_block("Pipeline-Block-A")
+    floor_a = factory.create_floor(block_a, "F1")
+    room_a = factory.create_room(block_a, floor_a, room_code="PA-101", room_type="1_IN_ROOM", beds_count=1)
+    bed_a = factory.create_bed(room_a, 1, status="AVAILABLE")
+
+    block_b = factory.create_block("Pipeline-Block-B")
+    floor_b = factory.create_floor(block_b, "F1")
+    room_b = factory.create_room(block_b, floor_b, room_code="PB-101", room_type="1_IN_ROOM", beds_count=1)
+    bed_b = factory.create_bed(room_b, 1, status="AVAILABLE")
+
+    tenant_a = factory.create_tenant("Pipeline Tenant A", status="prospect")
+    tenant_b = factory.create_tenant("Pipeline Tenant B", status="active")
+
+    factory.create_invoice(tenant_a, user=admin, reserved_bed=bed_a, status="approved", total=Decimal("500.00"))
+    paid_invoice = factory.create_invoice(tenant_b, user=admin, reserved_bed=bed_b, status="paid", total=Decimal("750.00"))
+    db_session.add(
+        TenantEvent(
+            tenant_id=tenant_b.id,
+            event_type="TENANT_CONFIRMED",
+            event_at=factory.now(),
+            user_id=admin.id,
+            detail_json={"invoice_id": paid_invoice.id},
+        )
+    )
+    db_session.flush()
+
+    scoped_a = get_onboarding_pipeline(db_session, as_of=factory.now(), block_id=block_a.id, floor_id=floor_a.id)
+    scoped_b = get_onboarding_pipeline(db_session, as_of=factory.now(), block_id=block_b.id, floor_id=floor_b.id)
+
+    assert scoped_a.prospects == 1
+    assert scoped_a.newly_activated_last_7d == 0
+    assert scoped_b.prospects == 0
+    assert scoped_b.newly_activated_last_7d == 1

@@ -24,6 +24,7 @@ type DataPanelProps = {
   description?: string;
   toolbar?: ReactNode;
   children: ReactNode;
+  tone?: "default" | "primary" | "secondary" | "supporting";
 };
 
 type FilterChip = {
@@ -70,9 +71,9 @@ export function SummaryStrip({ items }: SummaryStripProps) {
   );
 }
 
-export function DataPanel({ title, description, toolbar, children }: DataPanelProps) {
+export function DataPanel({ title, description, toolbar, children, tone = "default" }: DataPanelProps) {
   return (
-    <section className="panel data-panel">
+    <section className={`panel data-panel ${tone}`}>
       <div className="data-panel-header">
         <div className="data-panel-copy">
           <h3>{title}</h3>

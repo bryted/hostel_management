@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Allocation, Bed, Block, Floor, Invoice, Payment, Receipt, Room, Tenant, User
+from app.models import Allocation, Bed, Block, Floor, Invoice, Payment, PaymentAllocation, Receipt, Room, Tenant, User
 from ...deps import get_current_user, get_db_session
 from ...schemas import SearchResponse, SearchResultItem
 
@@ -25,6 +25,7 @@ def global_search(
 ) -> SearchResponse:
     pattern = _pattern(q)
     results: list[SearchResultItem] = []
+    per_group_limit = min(max(limit // 3, 3), 6)
 
     tenants = session.execute(
         select(Tenant)
@@ -36,7 +37,7 @@ def global_search(
             )
         )
         .order_by(Tenant.name.asc())
-        .limit(limit)
+        .limit(per_group_limit)
     ).scalars().all()
     for tenant in tenants:
         results.append(
@@ -60,7 +61,7 @@ def global_search(
             )
         )
         .order_by(sa.func.coalesce(Invoice.issued_at, Invoice.created_at).desc())
-        .limit(limit)
+        .limit(per_group_limit)
     ).all()
     for invoice, tenant in invoices:
         results.append(
@@ -83,7 +84,7 @@ def global_search(
             )
         )
         .order_by(sa.func.coalesce(Receipt.issued_at, Receipt.created_at).desc())
-        .limit(limit)
+        .limit(per_group_limit)
     ).all()
     for receipt, tenant in receipts:
         results.append(
@@ -96,6 +97,14 @@ def global_search(
             )
         )
 
+    payment_invoice_match = sa.exists(
+        select(PaymentAllocation.id)
+        .join(Invoice, Invoice.id == PaymentAllocation.invoice_id)
+        .where(
+            PaymentAllocation.payment_id == Payment.id,
+            Invoice.invoice_no.ilike(pattern),
+        )
+    )
     payments = session.execute(
         select(Payment, Tenant, Invoice)
         .join(Tenant, Tenant.id == Payment.tenant_id)
@@ -106,10 +115,11 @@ def global_search(
                 Payment.reference.ilike(pattern),
                 Tenant.name.ilike(pattern),
                 Invoice.invoice_no.ilike(pattern),
+                payment_invoice_match,
             )
         )
         .order_by(sa.func.coalesce(Payment.paid_at, Payment.created_at).desc())
-        .limit(limit)
+        .limit(per_group_limit)
     ).all()
     for payment, tenant, invoice in payments:
         results.append(
@@ -136,7 +146,7 @@ def global_search(
             )
         )
         .order_by(Block.name.asc(), Room.room_code.asc(), Bed.bed_number.asc())
-        .limit(limit)
+        .limit(per_group_limit)
     ).all()
     for bed, room, floor, block in beds:
         floor_label = floor.floor_label if floor is not None else "Unassigned"
@@ -162,7 +172,7 @@ def global_search(
             )
         )
         .order_by(Block.name.asc(), Room.room_code.asc())
-        .limit(limit)
+        .limit(per_group_limit)
     ).all()
     for room, floor, block in rooms:
         floor_label = floor.floor_label if floor is not None else "Unassigned"
@@ -193,7 +203,7 @@ def global_search(
             ),
         )
         .order_by(Allocation.created_at.desc())
-        .limit(limit)
+        .limit(per_group_limit)
     ).all()
     for allocation, tenant, bed, room, floor, block in allocations:
         floor_label = floor.floor_label if floor is not None else "Unassigned"
@@ -217,7 +227,7 @@ def global_search(
                 )
             )
             .order_by(User.full_name.asc())
-            .limit(limit)
+            .limit(per_group_limit)
         ).scalars().all()
         for account in users:
             results.append(

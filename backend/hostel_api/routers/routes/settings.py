@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import (
+    AcademicYear,
     AllocationEvent,
     BedEvent,
     InvoiceEvent,
@@ -195,6 +196,19 @@ def get_settings_overview(
         ),
         cashier_scope=CASHIER_SCOPE,
         admin_scope=ADMIN_SCOPE,
+        academic_years=[
+            {
+                "id": int(year.id),
+                "label": year.label,
+                "start_date": year.start_date.isoformat(),
+                "end_date": year.end_date.isoformat(),
+                "is_current": bool(year.is_current),
+                "is_closed": bool(year.is_closed),
+            }
+            for year in session.execute(
+                select(AcademicYear).order_by(AcademicYear.start_date.desc(), AcademicYear.id.desc()).limit(12)
+            ).scalars().all()
+        ],
     )
 
 

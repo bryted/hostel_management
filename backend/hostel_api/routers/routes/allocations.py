@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Allocation, Bed, BedReservation, Block, Floor, Invoice, Room, Tenant
+from app.services.common import operational_inventory_predicate
 from app.services.lifecycle import end_allocation_stay, format_timestamp, transfer_allocation_bed
 from ...deps import get_db_session, require_admin
 from ...schemas import (
@@ -77,6 +78,7 @@ def get_allocation_overview(
             .outerjoin(Floor, Floor.id == Room.floor_id)
             .where(Bed.id != allocation.bed_id)
             .where(Bed.status.in_(["AVAILABLE", "RESERVED"]))
+            .where(operational_inventory_predicate(Room, Block, Floor))
             .where(
                 ~sa.exists(
                     select(Allocation.id).where(

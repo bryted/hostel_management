@@ -11,91 +11,154 @@ from app.models import Allocation, Bed, BedReservation, Block, Floor, Invoice, R
 from app.services.common import format_money, get_base_currency
 from app.services.lifecycle import set_bed_maintenance_status
 from ...deps import get_current_user, get_db_session, require_admin
-from ...schemas import ActionResponse, BedListItem, SetMaintenanceRequest
+from ...schemas import ActionResponse, BedListItem, BedListResponse, SetMaintenanceRequest
 
 router = APIRouter()
 
 
-@router.get("", response_model=list[BedListItem])
+@router.get("", response_model=BedListResponse)
 def list_beds(
     block_id: int | None = Query(default=None),
     floor_id: int | None = Query(default=None),
     status_filter: str | None = Query(default=None, alias="status"),
     search: str | None = Query(default=None),
-    limit: int = Query(default=100, ge=1, le=500),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=200),
     _user: dict = Depends(get_current_user),
     session: Session = Depends(get_db_session),
-) -> list[BedListItem]:
+) -> BedListResponse:
     currency = get_base_currency()
-    bed_rows = session.execute(
-        select(Bed, Room, Floor, Block)
-        .join(Room, Room.id == Bed.room_id)
-        .join(Block, Block.id == Room.block_id)
-        .outerjoin(Floor, Floor.id == Room.floor_id)
-        .order_by(Block.name.asc(), Floor.floor_label.asc(), Room.room_code.asc(), Bed.bed_number.asc())
-    ).all()
-    reservation_rows = session.execute(
-        select(BedReservation, Tenant, Invoice)
+    floor_label_expr = sa.func.coalesce(Floor.floor_label, "Unassigned")
+    reservation_rows = (
+        select(
+            BedReservation.bed_id.label("bed_id"),
+            BedReservation.id.label("reservation_id"),
+            BedReservation.expires_at.label("reservation_expires"),
+            Tenant.id.label("tenant_id"),
+            Tenant.name.label("tenant_name"),
+            Invoice.id.label("invoice_id"),
+            Invoice.invoice_no.label("invoice_no"),
+        )
         .join(Tenant, Tenant.id == BedReservation.tenant_id)
         .outerjoin(Invoice, Invoice.id == BedReservation.invoice_id)
         .where(BedReservation.status == "ACTIVE")
-    ).all()
-    allocation_rows = session.execute(
-        select(Allocation, Tenant, Invoice)
+        .subquery()
+    )
+    allocation_rows = (
+        select(
+            Allocation.bed_id.label("bed_id"),
+            Allocation.id.label("allocation_id"),
+            Allocation.start_date.label("allocation_start"),
+            Tenant.id.label("tenant_id"),
+            Tenant.name.label("tenant_name"),
+            Invoice.id.label("invoice_id"),
+            Invoice.invoice_no.label("invoice_no"),
+        )
         .join(Tenant, Tenant.id == Allocation.tenant_id)
         .outerjoin(Invoice, Invoice.id == Allocation.invoice_id)
         .where(Allocation.status == "CONFIRMED")
-    ).all()
-    reservation_by_bed = {int(reservation.bed_id): (reservation, tenant, invoice) for reservation, tenant, invoice in reservation_rows}
-    allocation_by_bed = {int(allocation.bed_id): (allocation, tenant, invoice) for allocation, tenant, invoice in allocation_rows}
-    results: list[BedListItem] = []
-    for bed, room, floor, block in bed_rows:
-        if block_id is not None and int(block.id) != int(block_id):
-            continue
-        if floor_id is not None and (floor is None or int(floor.id) != int(floor_id)):
-            continue
-        if status_filter and bed.status != status_filter:
-            continue
-        reservation = reservation_by_bed.get(int(bed.id))
-        allocation = allocation_by_bed.get(int(bed.id))
-        tenant = allocation[1] if allocation else (reservation[1] if reservation else None)
-        invoice = allocation[2] if allocation and allocation[2] else (reservation[2] if reservation and reservation[2] else None)
-        floor_label = floor.floor_label if floor else "Unassigned"
-        haystack = " ".join(
-            [
-                block.name,
-                floor_label,
-                room.room_code,
-                bed.bed_label,
-                bed.status,
-                tenant.name if tenant else "",
-                invoice.invoice_no if invoice else "",
-            ]
-        ).lower()
-        if search and search.strip() and search.strip().lower() not in haystack:
-            continue
-        results.append(
-            BedListItem(
-                bed_id=int(bed.id),
-                block=block.name,
-                floor=floor_label,
-                room=room.room_code,
-                bed=bed.bed_label,
-                status=bed.status,
-                tenant=tenant.name if tenant else None,
-                tenant_id=int(tenant.id) if tenant else None,
-                invoice=invoice.invoice_no if invoice else None,
-                invoice_id=int(invoice.id) if invoice else None,
-                reservation_id=int(reservation[0].id) if reservation else None,
-                allocation_id=int(allocation[0].id) if allocation else None,
-                price_per_bed=format_money(room.unit_price_per_bed, currency),
-                reservation_expires=reservation[0].expires_at.isoformat() if reservation and reservation[0].expires_at else None,
-                allocation_start=allocation[0].start_date.isoformat() if allocation and allocation[0].start_date else None,
+        .subquery()
+    )
+
+    tenant_name_expr = sa.func.coalesce(allocation_rows.c.tenant_name, reservation_rows.c.tenant_name)
+    tenant_id_expr = sa.func.coalesce(allocation_rows.c.tenant_id, reservation_rows.c.tenant_id)
+    invoice_no_expr = sa.func.coalesce(allocation_rows.c.invoice_no, reservation_rows.c.invoice_no)
+    invoice_id_expr = sa.func.coalesce(allocation_rows.c.invoice_id, reservation_rows.c.invoice_id)
+
+    base_query = (
+        select(
+            Bed.id.label("bed_id"),
+            Block.name.label("block_name"),
+            floor_label_expr.label("floor_label"),
+            Room.room_code.label("room_code"),
+            Bed.bed_label.label("bed_label"),
+            Bed.status.label("bed_status"),
+            tenant_name_expr.label("tenant_name"),
+            tenant_id_expr.label("tenant_id"),
+            invoice_no_expr.label("invoice_no"),
+            invoice_id_expr.label("invoice_id"),
+            reservation_rows.c.reservation_id.label("reservation_id"),
+            allocation_rows.c.allocation_id.label("allocation_id"),
+            reservation_rows.c.reservation_expires.label("reservation_expires"),
+            allocation_rows.c.allocation_start.label("allocation_start"),
+            Room.unit_price_per_bed.label("unit_price_per_bed"),
+        )
+        .join(Room, Room.id == Bed.room_id)
+        .join(Block, Block.id == Room.block_id)
+        .outerjoin(Floor, Floor.id == Room.floor_id)
+        .outerjoin(reservation_rows, reservation_rows.c.bed_id == Bed.id)
+        .outerjoin(allocation_rows, allocation_rows.c.bed_id == Bed.id)
+    )
+    if block_id is not None:
+        base_query = base_query.where(Room.block_id == block_id)
+    if floor_id is not None:
+        base_query = base_query.where(Room.floor_id == floor_id)
+    if status_filter:
+        base_query = base_query.where(Bed.status == status_filter)
+    if search and search.strip():
+        pattern = f"%{search.strip()}%"
+        base_query = base_query.where(
+            sa.or_(
+                Block.name.ilike(pattern),
+                floor_label_expr.ilike(pattern),
+                Room.room_code.ilike(pattern),
+                Bed.bed_label.ilike(pattern),
+                sa.cast(Bed.status, sa.String).ilike(pattern),
+                tenant_name_expr.ilike(pattern),
+                invoice_no_expr.ilike(pattern),
             )
         )
-        if len(results) >= limit:
-            break
-    return results
+
+    filtered_beds = base_query.subquery()
+    summary_row = session.execute(
+        select(
+            sa.func.count().label("total"),
+            sa.func.coalesce(sa.func.sum(sa.case((filtered_beds.c.bed_status == "AVAILABLE", 1), else_=0)), 0),
+            sa.func.coalesce(sa.func.sum(sa.case((filtered_beds.c.bed_status == "RESERVED", 1), else_=0)), 0),
+            sa.func.coalesce(sa.func.sum(sa.case((filtered_beds.c.bed_status == "OCCUPIED", 1), else_=0)), 0),
+            sa.func.coalesce(sa.func.sum(sa.case((filtered_beds.c.bed_status == "OUT_OF_SERVICE", 1), else_=0)), 0),
+        )
+    ).one()
+    rows = session.execute(
+        select(filtered_beds)
+        .order_by(
+            filtered_beds.c.block_name.asc(),
+            filtered_beds.c.floor_label.asc(),
+            filtered_beds.c.room_code.asc(),
+            filtered_beds.c.bed_label.asc(),
+        )
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    return BedListResponse(
+        rows=[
+            BedListItem(
+                bed_id=int(row.bed_id),
+                block=row.block_name,
+                floor=row.floor_label,
+                room=row.room_code,
+                bed=row.bed_label,
+                status=row.bed_status,
+                tenant=row.tenant_name,
+                tenant_id=int(row.tenant_id) if row.tenant_id is not None else None,
+                invoice=row.invoice_no,
+                invoice_id=int(row.invoice_id) if row.invoice_id is not None else None,
+                reservation_id=int(row.reservation_id) if row.reservation_id is not None else None,
+                allocation_id=int(row.allocation_id) if row.allocation_id is not None else None,
+                price_per_bed=format_money(row.unit_price_per_bed, currency),
+                reservation_expires=row.reservation_expires.isoformat() if row.reservation_expires is not None else None,
+                allocation_start=row.allocation_start.isoformat() if row.allocation_start is not None else None,
+            )
+            for row in rows
+        ],
+        total=int(summary_row[0] or 0),
+        page=page,
+        page_size=page_size,
+        available_total=int(summary_row[1] or 0),
+        reserved_total=int(summary_row[2] or 0),
+        occupied_total=int(summary_row[3] or 0),
+        out_of_service_total=int(summary_row[4] or 0),
+    )
 
 
 @router.post("/{bed_id}/maintenance", response_model=ActionResponse)

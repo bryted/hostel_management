@@ -6,7 +6,7 @@ import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.models import Invoice, Payment, Receipt
+from app.models import AcademicYear, Invoice, Payment, Receipt
 from app.services.common import format_money, get_base_currency
 from app.services.dashboard_metrics import get_dashboard_snapshot
 from app.services.reservations import expired_hold_invoice_ids_query
@@ -36,6 +36,8 @@ def get_dashboard_summary(
         start_date=effective_start_date,
         end_date=effective_end_date,
         include_occupancy_tables=False,
+        include_availability_rows=False,
+        include_alert_rows=False,
     )
     range_start = datetime.combine(effective_start_date, datetime.min.time(), tzinfo=timezone.utc)
     range_end = datetime.combine(effective_end_date, datetime.max.time(), tzinfo=timezone.utc)
@@ -64,6 +66,9 @@ def get_dashboard_summary(
     hold_expired_invoices = session.execute(
         sa.select(sa.func.count()).select_from(expired_hold_invoice_ids_query().subquery())
     ).scalar_one()
+    current_academic_year = session.execute(
+        sa.select(AcademicYear.label).where(AcademicYear.is_current.is_(True)).limit(1)
+    ).scalar_one_or_none()
     return DashboardSummaryResponse(
         start_date=effective_start_date.isoformat(),
         end_date=effective_end_date.isoformat(),
@@ -82,4 +87,5 @@ def get_dashboard_summary(
         prospects=snapshot.onboarding.prospects,
         approved_unpaid=snapshot.onboarding.prospects_with_approved_unpaid,
         paid_unallocated=snapshot.onboarding.paid_unallocated_tenants,
+        current_academic_year=current_academic_year,
     )

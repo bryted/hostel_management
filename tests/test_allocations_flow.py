@@ -4,6 +4,7 @@ from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.models import Allocation, Bed
 from app.services.allocations import assign_bed_for_paid_invoice
@@ -36,6 +37,7 @@ def test_paid_invoice_assignment_confirms_allocation_and_marks_bed_occupied(fact
     assert result.created is True
     assert result.allocation_id == confirmed.id
     assert bed_db is not None and bed_db.status == "OCCUPIED"
+    assert confirmed.academic_year_id == invoice.academic_year_id
 
 
 def test_assignment_rejected_when_invoice_has_no_successful_payment(factory, db_session):
@@ -146,3 +148,31 @@ def test_assignment_rejected_when_tenant_already_has_confirmed_allocation(factor
             user_id=user.id,
             now=factory.now(),
         )
+
+
+def test_confirmed_allocation_indexes_block_duplicate_live_bed(factory, db_session):
+    block = factory.create_block("Alloc-Block-F")
+    floor = factory.create_floor(block, "Alloc-F6")
+    room = factory.create_room(block, floor, room_code="AL-601", room_type="2_IN_ROOM", beds_count=2)
+    bed = factory.create_bed(room, 1, status="OCCUPIED")
+    other_bed = factory.create_bed(room, 2, status="AVAILABLE")
+
+    user = factory.create_user("alloc-admin-6@example.com")
+    tenant_a = factory.create_tenant("Alloc Tenant E")
+    tenant_b = factory.create_tenant("Alloc Tenant F")
+    invoice_a = factory.create_invoice(tenant_a, user=user, status="paid", total=Decimal("1000.00"))
+    invoice_b = factory.create_invoice(tenant_b, user=user, status="paid", total=Decimal("1000.00"))
+
+    factory.create_allocation(bed, tenant=tenant_a, invoice=invoice_a, user=user)
+
+    duplicate = Allocation(
+        bed_id=bed.id,
+        tenant_id=tenant_b.id,
+        invoice_id=invoice_b.id,
+        status="CONFIRMED",
+        start_date=factory.now(),
+    )
+    db_session.add(duplicate)
+
+    with pytest.raises(IntegrityError):
+        db_session.flush()

@@ -8,14 +8,17 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Bed, BedReservation, Block, Floor, Invoice, InvoiceEvent, Payment, Receipt, Room, Tenant
+from app.models import Bed, BedReservation, Block, Floor, Invoice, InvoiceEvent, Payment, PaymentAllocation, Receipt, Room, Tenant
 from app.services.allocations import assign_bed_for_paid_invoice
-from app.services.common import combine_date, format_money, get_base_currency
+from app.services.common import combine_date, format_money, get_base_currency, select_operational_bed_rows
 from app.services.invoicing import (
     InvoiceValidationError,
     cancel_invoice,
     create_invoice,
-    get_paid_total,
+    get_payment_unallocated_total,
+    paid_totals_subquery,
+    payment_allocations_for_payment_ids,
+    payment_invoice_summary_text,
     record_payment,
     update_invoice_details,
     void_payment,
@@ -23,7 +26,6 @@ from app.services.invoicing import (
 from app.services.lifecycle import format_timestamp
 from app.services.onboarding import apply_first_payment_conversion
 from app.services.reservations import (
-    invoice_hold_expired,
     invoice_hold_snapshot,
     release_reservation_on_payment,
     reserve_bed_for_invoice,
@@ -66,8 +68,15 @@ def _bed_option(bed: Bed, room: Room, floor: Floor | None, block: Block) -> BedO
     )
 
 
-def _billing_invoice_item(session: Session, invoice: Invoice, tenant: Tenant, currency: str) -> BillingInvoiceItem:
-    paid_total = Decimal(str(get_paid_total(session, int(invoice.id))))
+def _billing_invoice_item(
+    session: Session,
+    invoice: Invoice,
+    tenant: Tenant,
+    currency: str,
+    *,
+    paid_total: Decimal | float | int = 0,
+) -> BillingInvoiceItem:
+    paid_total = Decimal(str(paid_total or 0))
     total = Decimal(str(invoice.total or 0))
     balance = total - paid_total
     hold_expires_at, hold_hours_left, hold_expired = invoice_hold_snapshot(
@@ -89,6 +98,7 @@ def _billing_invoice_item(session: Session, invoice: Invoice, tenant: Tenant, cu
         hold_expired=hold_expired,
         hold_expires_at=format_timestamp(hold_expires_at),
         hold_hours_left=hold_hours_left,
+        academic_year=invoice.academic_year.label if invoice.academic_year is not None else None,
     )
 
 
@@ -160,27 +170,44 @@ def get_invoice_detail(
     session: Session = Depends(get_db_session),
 ) -> InvoiceDetailResponse:
     currency = get_base_currency()
-    invoice = session.get(Invoice, invoice_id)
-    if invoice is None:
+    paid_totals = paid_totals_subquery()
+    invoice_row = session.execute(
+        select(Invoice, Tenant, sa.func.coalesce(paid_totals.c.paid_total, 0).label("paid_total"))
+        .join(Tenant, Tenant.id == Invoice.tenant_id)
+        .outerjoin(paid_totals, paid_totals.c.invoice_id == Invoice.id)
+        .where(Invoice.id == invoice_id)
+        .limit(1)
+    ).first()
+    if invoice_row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found.")
-
-    tenant = session.get(Tenant, invoice.tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found.")
-    invoice_item = _billing_invoice_item(session, invoice, tenant, currency)
+    invoice, tenant, paid_total = invoice_row
+    paid_total_decimal = Decimal(str(paid_total or 0))
+    invoice_item = _billing_invoice_item(
+        session,
+        invoice,
+        tenant,
+        currency,
+        paid_total=paid_total_decimal,
+    )
 
     payments = session.execute(
-        select(Payment).where(Payment.invoice_id == invoice.id).order_by(sa.func.coalesce(Payment.paid_at, Payment.created_at).desc())
+        select(Payment)
+        .join(PaymentAllocation, PaymentAllocation.payment_id == Payment.id)
+        .where(PaymentAllocation.invoice_id == invoice.id)
+        .group_by(Payment.id)
+        .order_by(sa.func.coalesce(Payment.paid_at, Payment.created_at).desc())
     ).scalars().all()
     receipts = session.execute(
-        select(Receipt).join(Payment, Payment.id == Receipt.payment_id).where(Payment.invoice_id == invoice.id).order_by(sa.func.coalesce(Receipt.issued_at, Receipt.created_at).desc())
+        select(Receipt)
+        .join(Payment, Payment.id == Receipt.payment_id)
+        .join(PaymentAllocation, PaymentAllocation.payment_id == Payment.id)
+        .where(PaymentAllocation.invoice_id == invoice.id)
+        .group_by(Receipt.id)
+        .order_by(sa.func.coalesce(Receipt.issued_at, Receipt.created_at).desc())
     ).scalars().all()
+    payment_allocation_map = payment_allocations_for_payment_ids(session, [int(payment.id) for payment in payments])
     bed_rows = session.execute(
-        select(Bed, Room, Floor, Block)
-        .join(Room, Room.id == Bed.room_id)
-        .join(Block, Block.id == Room.block_id)
-        .outerjoin(Floor, Floor.id == Room.floor_id)
-        .where(Bed.status == "AVAILABLE")
+        select_operational_bed_rows()
         .order_by(Block.name.asc(), Floor.floor_label.asc(), Room.room_code.asc(), Bed.bed_number.asc())
         .limit(100)
     ).all()
@@ -216,6 +243,17 @@ def get_invoice_detail(
                 reference=payment.reference,
                 status=payment.status,
                 paid_at=format_timestamp(payment.paid_at or payment.created_at),
+                academic_year=payment.academic_year.label if payment.academic_year is not None else None,
+                invoice_summary=payment_invoice_summary_text(
+                    session,
+                    int(payment.id),
+                    allocation_map=payment_allocation_map,
+                ),
+                allocated_total=format_money(
+                    Decimal(str(payment.amount or 0)) - get_payment_unallocated_total(session, payment),
+                    payment.currency,
+                ),
+                unallocated_amount=format_money(get_payment_unallocated_total(session, payment), payment.currency),
             )
             for payment in payments
         ],
@@ -226,6 +264,14 @@ def get_invoice_detail(
                 amount=format_money(receipt.amount, receipt.currency),
                 issued_at=format_timestamp(receipt.issued_at or receipt.created_at),
                 printed_count=int(receipt.printed_count or 0),
+                academic_year=receipt.academic_year.label if receipt.academic_year is not None else None,
+                invoice_summary=payment_invoice_summary_text(
+                    session,
+                    int(receipt.payment_id),
+                    allocation_map=payment_allocation_map,
+                )
+                if receipt.payment_id is not None
+                else "-",
             )
             for receipt in receipts
         ],
@@ -238,9 +284,9 @@ def get_invoice_detail(
         discount=format_money(invoice.discount, invoice.currency),
         notes=invoice.notes,
         can_edit=invoice.status in {"draft", "submitted", "approved", "partially_paid"}
-        and Decimal(str(get_paid_total(session, int(invoice.id)))) == Decimal("0"),
+        and paid_total_decimal == Decimal("0"),
         can_cancel=invoice.status not in {"paid", "cancelled"}
-        and Decimal(str(get_paid_total(session, int(invoice.id)))) == Decimal("0"),
+        and paid_total_decimal == Decimal("0"),
     )
 
 
@@ -426,11 +472,6 @@ def record_invoice_payment(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found.")
     if invoice.status not in {"approved", "partially_paid"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invoice is not payable.")
-    if invoice_hold_expired(session, int(invoice.id)) or invoice.reserved_bed_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invoice has no active bed hold. Select a new bed before recording payment.",
-        )
 
     reference = payload.reference.strip()
     if payload.method != "cash" and not reference:
@@ -509,6 +550,7 @@ def void_payment_route(
     payment = session.get(Payment, payment_id)
     if payment is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment not found.")
+    allocation_rows = payment_allocations_for_payment_ids(session, [int(payment.id)]).get(int(payment.id), [])
     settings = get_or_create_notification_settings(session)
     now = datetime.now(timezone.utc)
     try:
@@ -523,10 +565,10 @@ def void_payment_route(
     except InvoiceValidationError as exc:
         session.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    if payment.invoice_id is not None:
+    for _allocation, invoice in allocation_rows:
         _log_invoice_event(
             session,
-            int(payment.invoice_id),
+            int(invoice.id),
             "payment_voided",
             {
                 "user_id": int(user["id"]),
@@ -539,7 +581,7 @@ def void_payment_route(
     return ActionResponse(
         message="Payment voided.",
         payment_id=int(payment.id),
-        invoice_id=int(payment.invoice_id) if payment.invoice_id is not None else None,
+        invoice_id=int(allocation_rows[0][1].id) if len(allocation_rows) == 1 else None,
     )
 
 

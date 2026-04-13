@@ -6,7 +6,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
-from app.models import Allocation, Bed, BedEvent, BedReservation, Tenant
+from app.models import Allocation, Bed, BedEvent, BedReservation, Invoice, Tenant
 from app.services.lifecycle import (
     cancel_reservation_hold,
     end_allocation_stay,
@@ -47,7 +47,9 @@ def test_extend_and_cancel_reservation_hold(factory, db_session):
     )
     assert reservation.status == "CANCELLED"
     bed_db = db_session.get(Bed, bed.id)
+    invoice_db = db_session.get(Invoice, invoice.id)
     assert bed_db is not None and bed_db.status == "AVAILABLE"
+    assert invoice_db is not None and invoice_db.reserved_bed_id is None
 
 
 def test_end_allocation_marks_bed_available_and_tenant_inactive(factory, db_session):
@@ -74,6 +76,31 @@ def test_end_allocation_marks_bed_available_and_tenant_inactive(factory, db_sess
     assert allocation_db is not None and allocation_db.status == "ENDED"
     assert bed_db is not None and bed_db.status == "AVAILABLE"
     assert tenant_db is not None and tenant_db.status == "inactive"
+
+
+def test_end_allocation_keeps_tenant_prospect_when_hold_or_unsettled_invoice_remains(factory, db_session):
+    block = factory.create_block("Life-Block-E")
+    floor = factory.create_floor(block, "F1")
+    room = factory.create_room(block, floor, room_code="L-501", room_type="2_IN_ROOM", beds_count=2)
+    occupied_bed = factory.create_bed(room, 1, status="OCCUPIED")
+    reserved_bed = factory.create_bed(room, 2, status="RESERVED")
+    tenant = factory.create_tenant("Lifecycle Tenant E", status="active")
+    user = factory.create_user("lifecycle-admin-e@example.com")
+    paid_invoice = factory.create_invoice(tenant, user=user, reserved_bed=occupied_bed, status="paid", total=Decimal("1500.00"))
+    open_invoice = factory.create_invoice(tenant, user=user, reserved_bed=reserved_bed, status="approved", total=Decimal("900.00"))
+    allocation = factory.create_allocation(occupied_bed, tenant=tenant, invoice=paid_invoice, user=user)
+    factory.create_reservation(reserved_bed, tenant=tenant, invoice=open_invoice, user=user)
+
+    end_allocation_stay(
+        db_session,
+        allocation_id=allocation.id,
+        user_id=user.id,
+        now=factory.now(),
+        reason="Move out completed",
+    )
+
+    tenant_db = db_session.get(Tenant, tenant.id)
+    assert tenant_db is not None and tenant_db.status == "prospect"
 
 
 def test_transfer_allocation_moves_resident_and_logs_bed_events(factory, db_session):

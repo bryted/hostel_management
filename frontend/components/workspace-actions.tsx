@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type {
   AllocationSummary,
@@ -47,10 +47,52 @@ export function WorkspaceActions({
   const [assignBedId, setAssignBedId] = useState(
     availableBeds[0] ? String(availableBeds[0].bed_id) : "",
   );
+  const transferBeds = allocation
+    ? availableBeds.filter((bed) => bed.bed_id !== allocation.bed_id)
+    : [];
+  const selectedTransferBed = transferBeds.find((bed) => String(bed.bed_id) === transferBedId) ?? null;
+  const selectedAssignInvoice = allocatableInvoices.find((invoice) => String(invoice.id) === assignInvoiceId) ?? null;
+  const selectedAssignBed = availableBeds.find((bed) => String(bed.bed_id) === assignBedId) ?? null;
 
   if (!user.is_admin) {
     return null;
   }
+
+  useEffect(() => {
+    if (!transferBeds.length) {
+      if (transferBedId) {
+        setTransferBedId("");
+      }
+      return;
+    }
+    if (!transferBeds.some((bed) => String(bed.bed_id) === transferBedId)) {
+      setTransferBedId(String(transferBeds[0].bed_id));
+    }
+  }, [transferBedId, transferBeds]);
+
+  useEffect(() => {
+    if (!allocatableInvoices.length) {
+      if (assignInvoiceId) {
+        setAssignInvoiceId("");
+      }
+      return;
+    }
+    if (!allocatableInvoices.some((invoice) => String(invoice.id) === assignInvoiceId)) {
+      setAssignInvoiceId(String(allocatableInvoices[0].id));
+    }
+  }, [allocatableInvoices, assignInvoiceId]);
+
+  useEffect(() => {
+    if (!availableBeds.length) {
+      if (assignBedId) {
+        setAssignBedId("");
+      }
+      return;
+    }
+    if (!availableBeds.some((bed) => String(bed.bed_id) === assignBedId)) {
+      setAssignBedId(String(availableBeds[0].bed_id));
+    }
+  }, [assignBedId, availableBeds]);
 
   async function runAction(path: string, payload: object, confirmation: string) {
     if (!(await confirmAction(confirmation))) {
@@ -72,7 +114,7 @@ export function WorkspaceActions({
   }
 
   return (
-    <section className="panel">
+    <section className="panel workspace-panel primary">
       <h3>Workflow actions</h3>
       <div className="stack">
         {allocation ? (
@@ -110,9 +152,10 @@ export function WorkspaceActions({
                 <>
                   <select
                     value={transferBedId}
+                    disabled={!transferBeds.length}
                     onChange={(event) => setTransferBedId(event.target.value)}
                   >
-                    {availableBeds.map((bed) => (
+                    {transferBeds.map((bed) => (
                       <option key={bed.bed_id} value={bed.bed_id}>
                         {bed.label}
                       </option>
@@ -120,7 +163,7 @@ export function WorkspaceActions({
                   </select>
                   <button
                     className="button secondary"
-                    disabled={pending}
+                    disabled={pending || !selectedTransferBed}
                     onClick={() =>
                       runAction(
                         `/allocations/${allocation.id}/transfer`,
@@ -130,7 +173,7 @@ export function WorkspaceActions({
                         },
                         buildConfirmationMessage("Transfer this tenant to a new bed?", [
                           `Current bed: ${allocation.block} / ${allocation.floor} / ${allocation.room} / ${allocation.bed}`,
-                          `New bed ID: ${transferBedId}`,
+                          selectedTransferBed ? `New bed: ${selectedTransferBed.label}` : null,
                           reason.trim() ? `Reason: ${reason.trim()}` : "No transfer note entered.",
                         ]),
                       )
@@ -139,7 +182,9 @@ export function WorkspaceActions({
                     Transfer bed
                   </button>
                 </>
-              ) : null}
+              ) : (
+                <p className="section-note">No transfer beds are currently available.</p>
+              )}
             </div>
           </div>
         ) : null}
@@ -220,7 +265,7 @@ export function WorkspaceActions({
               >
                 {allocatableInvoices.map((invoice) => (
                   <option key={invoice.id} value={invoice.id}>
-                    {invoice.invoice_no}
+                    {invoice.invoice_no} | {invoice.balance} | {invoice.academic_year ?? "-"}
                   </option>
                 ))}
               </select>
@@ -244,8 +289,8 @@ export function WorkspaceActions({
                     bed_id: Number(assignBedId),
                   },
                   buildConfirmationMessage("Assign this paid invoice to a bed?", [
-                    `Invoice ID: ${assignInvoiceId}`,
-                    `Bed ID: ${assignBedId}`,
+                    selectedAssignInvoice ? `Invoice: ${selectedAssignInvoice.invoice_no}` : null,
+                    selectedAssignBed ? `Bed: ${selectedAssignBed.label}` : null,
                     "This will confirm the tenant's stay on the selected bed.",
                   ]),
                 )

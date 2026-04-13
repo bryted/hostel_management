@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 import sqlalchemy as sa
 from sqlalchemy import MetaData
@@ -61,7 +61,29 @@ ALLOCATION_STATUS_ENUM = sa.Enum(
     "CONFIRMED",
     "ENDED",
     name="allocation_status",
-)
+    )
+
+
+class AcademicYear(Base):
+    __tablename__ = "academic_years"
+    __table_args__ = (
+        sa.UniqueConstraint("label", name="uq_academic_years_label"),
+        sa.Index("ix_academic_years_is_current", "is_current"),
+        sa.Index("ix_academic_years_start_end", "start_date", "end_date"),
+    )
+
+    id: Mapped[int] = mapped_column(sa.BigInteger, sa.Identity(), primary_key=True)
+    label: Mapped[str] = mapped_column(sa.String(20), nullable=False)
+    start_date: Mapped[date] = mapped_column(sa.Date, nullable=False)
+    end_date: Mapped[date] = mapped_column(sa.Date, nullable=False)
+    is_current: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, server_default=sa.text("false"))
+    is_closed: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, server_default=sa.text("false"))
+
+    invoices: Mapped[list[Invoice]] = relationship("Invoice", back_populates="academic_year")
+    payments: Mapped[list[Payment]] = relationship("Payment", back_populates="academic_year")
+    receipts: Mapped[list[Receipt]] = relationship("Receipt", back_populates="academic_year")
+    reservations: Mapped[list[BedReservation]] = relationship("BedReservation", back_populates="academic_year")
+    allocations: Mapped[list[Allocation]] = relationship("Allocation", back_populates="academic_year")
 
 
 class Tenant(Base, TimestampMixin):
@@ -202,11 +224,27 @@ class Bed(Base, TimestampMixin):
 
 class BedReservation(Base, TimestampMixin):
     __tablename__ = "bed_reservations"
+    __table_args__ = (
+        sa.Index(
+            "uq_bed_reservations_active_bed_id",
+            "bed_id",
+            unique=True,
+            postgresql_where=sa.text("status = 'ACTIVE'"),
+        ),
+        sa.Index(
+            "uq_bed_reservations_active_invoice_id",
+            "invoice_id",
+            unique=True,
+            postgresql_where=sa.text("invoice_id IS NOT NULL AND status = 'ACTIVE'"),
+        ),
+        sa.Index("ix_bed_reservations_academic_year_id", "academic_year_id"),
+    )
 
     id: Mapped[int] = mapped_column(sa.BigInteger, sa.Identity(), primary_key=True)
     bed_id: Mapped[int] = mapped_column(sa.BigInteger, sa.ForeignKey("beds.id"))
     tenant_id: Mapped[int] = mapped_column(sa.BigInteger, sa.ForeignKey("tenants.id"))
     invoice_id: Mapped[int | None] = mapped_column(sa.BigInteger, sa.ForeignKey("invoices.id"))
+    academic_year_id: Mapped[int | None] = mapped_column(sa.BigInteger, sa.ForeignKey("academic_years.id"))
     status: Mapped[str] = mapped_column(
         BED_RESERVATION_STATUS_ENUM,
         nullable=False,
@@ -226,6 +264,7 @@ class BedReservation(Base, TimestampMixin):
     bed: Mapped[Bed] = relationship("Bed", back_populates="reservations")
     tenant: Mapped[Tenant] = relationship("Tenant", back_populates="reservations")
     invoice: Mapped[Invoice | None] = relationship("Invoice", back_populates="reservations")
+    academic_year: Mapped[AcademicYear | None] = relationship("AcademicYear", back_populates="reservations")
     reserved_by_user: Mapped[User | None] = relationship("User", foreign_keys=[reserved_by])
     extended_by_user: Mapped[User | None] = relationship("User", foreign_keys=[extended_by])
     cancelled_by_user: Mapped[User | None] = relationship("User", foreign_keys=[cancelled_by])
@@ -233,11 +272,33 @@ class BedReservation(Base, TimestampMixin):
 
 class Allocation(Base, TimestampMixin):
     __tablename__ = "allocations"
+    __table_args__ = (
+        sa.Index(
+            "uq_allocations_confirmed_bed_id",
+            "bed_id",
+            unique=True,
+            postgresql_where=sa.text("status = 'CONFIRMED'"),
+        ),
+        sa.Index(
+            "uq_allocations_confirmed_invoice_id",
+            "invoice_id",
+            unique=True,
+            postgresql_where=sa.text("invoice_id IS NOT NULL AND status = 'CONFIRMED'"),
+        ),
+        sa.Index(
+            "uq_allocations_confirmed_tenant_id",
+            "tenant_id",
+            unique=True,
+            postgresql_where=sa.text("status = 'CONFIRMED'"),
+        ),
+        sa.Index("ix_allocations_academic_year_id", "academic_year_id"),
+    )
 
     id: Mapped[int] = mapped_column(sa.BigInteger, sa.Identity(), primary_key=True)
     bed_id: Mapped[int] = mapped_column(sa.BigInteger, sa.ForeignKey("beds.id"))
     tenant_id: Mapped[int] = mapped_column(sa.BigInteger, sa.ForeignKey("tenants.id"))
     invoice_id: Mapped[int | None] = mapped_column(sa.BigInteger, sa.ForeignKey("invoices.id"))
+    academic_year_id: Mapped[int | None] = mapped_column(sa.BigInteger, sa.ForeignKey("academic_years.id"))
     status: Mapped[str] = mapped_column(
         ALLOCATION_STATUS_ENUM,
         nullable=False,
@@ -252,6 +313,7 @@ class Allocation(Base, TimestampMixin):
     bed: Mapped[Bed] = relationship("Bed", back_populates="allocations")
     tenant: Mapped[Tenant] = relationship("Tenant", back_populates="allocations")
     invoice: Mapped[Invoice | None] = relationship("Invoice", back_populates="allocations")
+    academic_year: Mapped[AcademicYear | None] = relationship("AcademicYear", back_populates="allocations")
     ended_by_user: Mapped[User | None] = relationship("User", foreign_keys=[ended_by])
 
 
@@ -293,10 +355,19 @@ class AllocationEvent(Base):
 
 class Invoice(Base, TimestampMixin):
     __tablename__ = "invoices"
+    __table_args__ = (
+        sa.Index("ix_invoices_tenant_id_created_at", "tenant_id", "created_at"),
+        sa.Index("ix_invoices_status_created_at", "status", "created_at"),
+        sa.Index("ix_invoices_status_issued_at", "status", "issued_at"),
+        sa.Index("ix_invoices_status_due_at", "status", "due_at"),
+        sa.Index("ix_invoices_currency_status", "currency", "status"),
+        sa.Index("ix_invoices_academic_year_id_status", "academic_year_id", "status"),
+    )
 
     id: Mapped[int] = mapped_column(sa.BigInteger, sa.Identity(), primary_key=True)
     tenant_id: Mapped[int] = mapped_column(sa.BigInteger, sa.ForeignKey("tenants.id"))
     user_id: Mapped[int | None] = mapped_column(sa.BigInteger, sa.ForeignKey("users.id"))
+    academic_year_id: Mapped[int | None] = mapped_column(sa.BigInteger, sa.ForeignKey("academic_years.id"))
     reserved_bed_id: Mapped[int | None] = mapped_column(
         sa.BigInteger, sa.ForeignKey("beds.id"), nullable=True
     )
@@ -324,6 +395,7 @@ class Invoice(Base, TimestampMixin):
 
     tenant: Mapped[Tenant] = relationship("Tenant")
     user: Mapped[User | None] = relationship("User")
+    academic_year: Mapped[AcademicYear | None] = relationship("AcademicYear", back_populates="invoices")
     reserved_bed: Mapped[Bed | None] = relationship("Bed", foreign_keys=[reserved_bed_id])
     items: Mapped[list[InvoiceItem]] = relationship("InvoiceItem", back_populates="invoice")
     events: Mapped[list[InvoiceEvent]] = relationship("InvoiceEvent", back_populates="invoice")
@@ -332,6 +404,9 @@ class Invoice(Base, TimestampMixin):
     )
     allocations: Mapped[list[Allocation]] = relationship(
         "Allocation", back_populates="invoice"
+    )
+    payment_allocations: Mapped[list[PaymentAllocation]] = relationship(
+        "PaymentAllocation", back_populates="invoice"
     )
 
 
@@ -365,10 +440,19 @@ class InvoiceEvent(Base):
 
 class Payment(Base, TimestampMixin):
     __tablename__ = "payments"
+    __table_args__ = (
+        sa.Index("ix_payments_invoice_id_paid_at", "invoice_id", "paid_at"),
+        sa.Index("ix_payments_tenant_id_paid_at", "tenant_id", "paid_at"),
+        sa.Index("ix_payments_status_paid_at", "status", "paid_at"),
+        sa.Index("ix_payments_currency_paid_at", "currency", "paid_at"),
+        sa.Index("ix_payments_reference", "reference"),
+        sa.Index("ix_payments_academic_year_id_paid_at", "academic_year_id", "paid_at"),
+    )
 
     id: Mapped[int] = mapped_column(sa.BigInteger, sa.Identity(), primary_key=True)
     tenant_id: Mapped[int] = mapped_column(sa.BigInteger, sa.ForeignKey("tenants.id"))
     invoice_id: Mapped[int | None] = mapped_column(sa.BigInteger, sa.ForeignKey("invoices.id"))
+    academic_year_id: Mapped[int | None] = mapped_column(sa.BigInteger, sa.ForeignKey("academic_years.id"))
     handled_by_user_id: Mapped[int | None] = mapped_column(
         sa.BigInteger, sa.ForeignKey("users.id"), nullable=True
     )
@@ -389,15 +473,51 @@ class Payment(Base, TimestampMixin):
 
     tenant: Mapped[Tenant] = relationship("Tenant")
     invoice: Mapped[Invoice | None] = relationship("Invoice")
+    academic_year: Mapped[AcademicYear | None] = relationship("AcademicYear", back_populates="payments")
     handled_by_user: Mapped[User | None] = relationship("User")
+    allocations: Mapped[list[PaymentAllocation]] = relationship("PaymentAllocation", back_populates="payment")
+
+
+class PaymentAllocation(Base):
+    __tablename__ = "payment_allocations"
+    __table_args__ = (
+        sa.Index("ix_payment_allocations_payment_id", "payment_id"),
+        sa.Index("ix_payment_allocations_invoice_id", "invoice_id"),
+        sa.Index("ix_payment_allocations_tenant_year", "tenant_id", "academic_year_id"),
+    )
+
+    id: Mapped[int] = mapped_column(sa.BigInteger, sa.Identity(), primary_key=True)
+    payment_id: Mapped[int] = mapped_column(sa.BigInteger, sa.ForeignKey("payments.id"))
+    invoice_id: Mapped[int] = mapped_column(sa.BigInteger, sa.ForeignKey("invoices.id"))
+    tenant_id: Mapped[int] = mapped_column(sa.BigInteger, sa.ForeignKey("tenants.id"))
+    academic_year_id: Mapped[int | None] = mapped_column(sa.BigInteger, sa.ForeignKey("academic_years.id"))
+    allocated_amount: Mapped[float] = mapped_column(sa.Numeric(12, 2), nullable=False, server_default="0")
+    allocated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )
+    allocated_by_user_id: Mapped[int | None] = mapped_column(sa.BigInteger, sa.ForeignKey("users.id"))
+    note: Mapped[str | None] = mapped_column(sa.Text)
+
+    payment: Mapped[Payment] = relationship("Payment", back_populates="allocations")
+    invoice: Mapped[Invoice] = relationship("Invoice", back_populates="payment_allocations")
+    tenant: Mapped[Tenant] = relationship("Tenant")
+    academic_year: Mapped[AcademicYear | None] = relationship("AcademicYear")
+    allocated_by_user: Mapped[User | None] = relationship("User")
 
 
 class Receipt(Base, TimestampMixin):
     __tablename__ = "receipts"
+    __table_args__ = (
+        sa.Index("ix_receipts_payment_id_issued_at", "payment_id", "issued_at"),
+        sa.Index("ix_receipts_tenant_id_issued_at", "tenant_id", "issued_at"),
+        sa.Index("ix_receipts_issued_at", "issued_at"),
+        sa.Index("ix_receipts_academic_year_id_issued_at", "academic_year_id", "issued_at"),
+    )
 
     id: Mapped[int] = mapped_column(sa.BigInteger, sa.Identity(), primary_key=True)
     tenant_id: Mapped[int] = mapped_column(sa.BigInteger, sa.ForeignKey("tenants.id"))
     payment_id: Mapped[int | None] = mapped_column(sa.BigInteger, sa.ForeignKey("payments.id"))
+    academic_year_id: Mapped[int | None] = mapped_column(sa.BigInteger, sa.ForeignKey("academic_years.id"))
     receipt_no: Mapped[str] = mapped_column(
         sa.String(32),
         nullable=False,
@@ -411,6 +531,7 @@ class Receipt(Base, TimestampMixin):
 
     tenant: Mapped[Tenant] = relationship("Tenant")
     payment: Mapped[Payment | None] = relationship("Payment")
+    academic_year: Mapped[AcademicYear | None] = relationship("AcademicYear", back_populates="receipts")
     events: Mapped[list[ReceiptEvent]] = relationship("ReceiptEvent", back_populates="receipt")
 
 

@@ -98,7 +98,7 @@ export default async function AllocationsPage({ searchParams }: PageProps) {
           { label: "Transfer-ready", value: transferableRows, tone: "success" },
         ]}
       />
-      <DataPanel title="Active stays">
+      <DataPanel title="Active stays" description="Current resident stays with direct transfer and move-out control." tone="primary">
         <AllocationRoster rows={overview.rows} />
       </DataPanel>
     </div>
